@@ -156,7 +156,24 @@ impl eframe::App for MyApp {
                 }
                 let res = serial.write_all(&sendstring.as_bytes());
                 if res.is_ok() {
-                    self.issue_new_write = false;
+                    match self.scpimode {
+                        ScpiMode::SYST => {
+                            self.scpimode = ScpiMode::MEAS;
+                            // write only command with no return data
+                            // go straight to next write
+                            self.issue_new_write = true;
+                        }
+                        ScpiMode::CONF => {
+                            self.scpimode = ScpiMode::MEAS;
+                            // write only command with no return data
+                            // go straight to next write
+                            self.issue_new_write = true;
+                        }
+                        _ => {
+                            // await read data first
+                            self.issue_new_write = false;
+                        }
+                    }
                 }
             }
 
