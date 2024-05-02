@@ -29,7 +29,8 @@ downloader = "0.2.7"
 tempdir = "0.3.7"
 glob = "0.3.1"
 arboard = "3.3.2"
-
+mio-serial = "5.0.5"
+mio = "0.8.11"
 
 # You only need serde if you want app persistence:
 serde = { version = "1", features = ["derive"] }
