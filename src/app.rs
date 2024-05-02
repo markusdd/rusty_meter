@@ -1,5 +1,7 @@
 use std::{
+    array,
     collections::VecDeque,
+    f64::NAN,
     fs::{create_dir_all, read_to_string},
     io::{Read, Write},
     path::Path,
@@ -25,6 +27,13 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SERIAL_TOKEN: Token = Token(0);
 
+enum ScpiMode {
+    IDN,
+    CONF,
+    SYST,
+    MEAS,
+}
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
@@ -36,7 +45,15 @@ pub struct MyApp {
     parity: bool,
     connect_on_startup: bool,
     #[serde(skip)]
-    readbuf: Vec<u8>,
+    scpimode: ScpiMode,
+    #[serde(skip)]
+    confstring: String,
+    #[serde(skip)]
+    curr_meas: f64,
+    #[serde(skip)]
+    issue_new_write: bool,
+    #[serde(skip)]
+    readbuf: [u8; 1024],
     #[serde(skip)]
     portlist: VecDeque<String>,
     #[serde(skip)]
@@ -66,7 +83,11 @@ impl Default for MyApp {
             stop_bits: 1,
             parity: false,
             connect_on_startup: false,
-            readbuf: vec![],
+            scpimode: ScpiMode::IDN,
+            confstring: "".to_owned(),
+            curr_meas: NAN,
+            issue_new_write: false,
+            readbuf: [0u8; 1024],
             portlist: VecDeque::with_capacity(11),
             poll: Poll::new().unwrap(), // if this does not work there's no point in running anyway
             events: Events::with_capacity(1),
@@ -120,8 +141,24 @@ impl eframe::App for MyApp {
 
         if let Some(serial) = &mut self.serial {
             // Poll to check if we have serial events waiting for us.
-            let res = self.poll.poll(&mut self.events, None);
-            println!("Poll: {:?}", res);
+            let _ = self
+                .poll
+                .poll(&mut self.events, Some(Duration::from_millis(1)));
+            //println!("Poll: {:?}", res);
+
+            if self.issue_new_write {
+                let sendstring;
+                match self.scpimode {
+                    ScpiMode::IDN => sendstring = "*IDN?\n",
+                    ScpiMode::SYST => sendstring = "SYST:REM\n",
+                    ScpiMode::CONF => sendstring = &self.confstring, // TODO update UI only when sent successfully
+                    ScpiMode::MEAS => sendstring = "MEAS?\n",
+                }
+                let res = serial.write_all(&sendstring.as_bytes());
+                if res.is_ok() {
+                    self.issue_new_write = false;
+                }
+            }
 
             // Process each event.
             for event in self.events.iter() {
@@ -133,17 +170,46 @@ impl eframe::App for MyApp {
                         // In this loop we receive all packets queued for the socket.
                         match serial.read(&mut self.readbuf) {
                             Ok(count) => {
+                                //println!("Count read: {:?}", count);
                                 let content = String::from_utf8_lossy(&self.readbuf[..count]);
                                 println!("{:?}", content);
-                                self.device += &content;
+                                // do not send a new request until we have the result of the old one
+                                // OWON terminates everything with \r\n
+                                if content.ends_with("\r\n") {
+                                    self.issue_new_write = true;
+                                    match self.scpimode {
+                                        ScpiMode::IDN => {
+                                            // Device ID string received, save it for UI
+                                            // and move on to SYST mode
+                                            self.device = content.trim_end().to_owned();
+                                            self.scpimode = ScpiMode::SYST;
+                                        }
+                                        ScpiMode::SYST => {
+                                            // no read data, SYST commands await no response
+                                            // if anything came we just ignore it
+                                            // change to measurement mode right after
+                                            self.scpimode = ScpiMode::MEAS;
+                                        }
+                                        ScpiMode::CONF => {
+                                            // see SYST
+                                            self.scpimode = ScpiMode::MEAS;
+                                        }
+                                        ScpiMode::MEAS => {
+                                            // measurement value mode, store if we got something new
+                                            self.curr_meas =
+                                                content.trim_end().parse::<f64>().unwrap_or(NAN);
+                                        }
+                                    }
+                                }
                             }
                             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                println!("WouldBlock escape");
+                                // println!("WouldBlock escape");
                                 break;
                             }
                             Err(e) => {
                                 println!("Quitting due to read error: {}", e);
                                 // return Err(e);
+                                break; // TODO display this
                             }
                         }
                     },
@@ -203,23 +269,20 @@ impl eframe::App for MyApp {
                             .open_native_async()
                             .ok();
                         if let Some(serial) = &mut self.serial {
-                            let res = self.poll.registry().register(
+                            let _ = self.poll.registry().register(
                                 serial,
                                 SERIAL_TOKEN,
                                 Interest::READABLE | Interest::WRITABLE,
                             );
-                            println!("Registry: {:?}", res);
-                            serial.set_data_bits(DataBits::Eight);
-                            serial.set_stop_bits(mio_serial::StopBits::One);
-                            serial.set_parity(mio_serial::Parity::None);
-                            //let res = serial.write("SYST:REM\n".as_bytes());
-                            // println!("{:?}", res);
-                            // let res = serial.flush();
-                            // println!("{:?}", res);
-                            //let res = serial.write("*IDN?\n".as_bytes());
-                            // println!("*IDN?: {:?}", res);
-                            //let res = serial.write("MEAS?\n".as_bytes());
-                            //println!("MEAS?: {:?}", res);
+
+                            // configure serial session
+                            // TODO this might need to be generalized
+                            let _ = serial.set_data_bits(DataBits::Eight);
+                            let _ = serial.set_stop_bits(mio_serial::StopBits::One);
+                            let _ = serial.set_parity(mio_serial::Parity::None);
+
+                            //kick off first write
+                            self.issue_new_write = true;
                         }
                     }
                 });
@@ -236,6 +299,7 @@ impl eframe::App for MyApp {
             ui.separator();
 
             ui.vertical(|ui| {
+                ui.label(&self.curr_meas.to_string());
                 ui.separator();
 
                 ui.horizontal(|ui| {});
