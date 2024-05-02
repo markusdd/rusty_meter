@@ -35,6 +35,9 @@ pub struct MyApp {
     stop_bits: u32,
     parity: bool,
     connect_on_startup: bool,
+    #[serde(skip)]
+    readbuf: Vec<u8>,
+    #[serde(skip)]
     portlist: VecDeque<String>,
     #[serde(skip)]
     poll: Poll,
@@ -63,6 +66,7 @@ impl Default for MyApp {
             stop_bits: 1,
             parity: false,
             connect_on_startup: false,
+            readbuf: vec![],
             portlist: VecDeque::with_capacity(11),
             poll: Poll::new().unwrap(), // if this does not work there's no point in running anyway
             events: Events::with_capacity(1),
@@ -119,9 +123,6 @@ impl eframe::App for MyApp {
             let res = self.poll.poll(&mut self.events, None);
             println!("Poll: {:?}", res);
 
-            // buffer for read data
-            let mut buf = vec![];
-
             // Process each event.
             for event in self.events.iter() {
                 // Validate the token we registered our socket with,
@@ -130,10 +131,11 @@ impl eframe::App for MyApp {
                 match event.token() {
                     SERIAL_TOKEN => loop {
                         // In this loop we receive all packets queued for the socket.
-                        match serial.read(&mut buf) {
+                        match serial.read(&mut self.readbuf) {
                             Ok(count) => {
-                                println!("{:?}", String::from_utf8_lossy(&buf[..count]));
-                                self.device = String::from_utf8_lossy(&buf).to_string();
+                                let content = String::from_utf8_lossy(&self.readbuf[..count]);
+                                println!("{:?}", content);
+                                self.device += &content;
                             }
                             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                                 println!("WouldBlock escape");
@@ -210,14 +212,14 @@ impl eframe::App for MyApp {
                             serial.set_data_bits(DataBits::Eight);
                             serial.set_stop_bits(mio_serial::StopBits::One);
                             serial.set_parity(mio_serial::Parity::None);
-                            let res = serial.write("SYST:REM\n".as_bytes());
+                            //let res = serial.write("SYST:REM\n".as_bytes());
                             // println!("{:?}", res);
                             // let res = serial.flush();
                             // println!("{:?}", res);
                             //let res = serial.write("*IDN?\n".as_bytes());
                             // println!("*IDN?: {:?}", res);
-                            let res = serial.write("MEAS?\n".as_bytes());
-                            println!("MEAS?: {:?}", res);
+                            //let res = serial.write("MEAS?\n".as_bytes());
+                            //println!("MEAS?: {:?}", res);
                         }
                     }
                 });
