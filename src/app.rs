@@ -454,6 +454,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:VOLT:DC AUTO\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                             let vac_btn = egui::Button::new("VAC")
                                 .selected(self.metermode == MeterMode::VAC)
@@ -464,6 +465,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:VOLT:AC AUTO\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                             let adc_btn = egui::Button::new("ADC")
                                 .selected(self.metermode == MeterMode::ADC)
@@ -474,6 +476,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:CURR:DC AUTO\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                             let aac_btn = egui::Button::new("AAC")
                                 .selected(self.metermode == MeterMode::AAC)
@@ -484,6 +487,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                         });
                         ui.horizontal(|ui| {
@@ -496,6 +500,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:RES AUTO\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                             let cap_btn = egui::Button::new("C")
                                 .selected(self.metermode == MeterMode::CAP)
@@ -506,6 +511,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:CAP AUTO\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                             let freq_btn = egui::Button::new("Freq")
                                 .selected(self.metermode == MeterMode::FREQ)
@@ -516,6 +522,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:FREQ\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                             let per_btn = egui::Button::new("Period")
                                 .selected(self.metermode == MeterMode::PER)
@@ -526,6 +533,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:PER\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                         });
                         ui.horizontal(|ui| {
@@ -538,6 +546,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:DIOD\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                             let cont_btn = egui::Button::new("Cont")
                                 .selected(self.metermode == MeterMode::CONT)
@@ -548,6 +557,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:DIOD\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                             let cont_btn = egui::Button::new("Temp")
                                 .selected(self.metermode == MeterMode::TEMP)
@@ -559,6 +569,7 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:TEMP:RTD 2\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
+                                self.values = VecDeque::with_capacity(self.mem_depth);
                             }
                         });
                     });
