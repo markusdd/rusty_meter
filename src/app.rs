@@ -13,6 +13,7 @@ use downloader::{Download, Downloader};
 use egui::{Context, FontData, FontDefinitions, FontFamily, FontId, TextEdit, Vec2, Window};
 use egui_dropdown::DropDownBox;
 use egui_extras::{Column, TableBuilder};
+use egui_plot::{Legend, Line, Plot, PlotPoints};
 use glob::glob;
 use indexmap::{indexmap, IndexMap};
 use mio::{Events, Interest, Poll, Token};
@@ -35,6 +36,21 @@ enum ScpiMode {
     MEAS,
 }
 
+#[derive(PartialEq)]
+enum MeterMode {
+    VDC,
+    VAC,
+    ADC,
+    AAC,
+    RES,
+    CAP,
+    FREQ,
+    PER,
+    DIOD,
+    CONT,
+    TEMP,
+}
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
@@ -45,6 +61,8 @@ pub struct MyApp {
     stop_bits: u32,
     parity: bool,
     connect_on_startup: bool,
+    #[serde(skip)]
+    metermode: MeterMode,
     #[serde(skip)]
     scpimode: ScpiMode,
     #[serde(skip)]
@@ -59,6 +77,8 @@ pub struct MyApp {
     readbuf: [u8; 1024],
     #[serde(skip)]
     portlist: VecDeque<String>,
+    #[serde(skip)]
+    values: VecDeque<f64>,
     #[serde(skip)]
     poll: Poll,
     #[serde(skip)]
@@ -86,6 +106,7 @@ impl Default for MyApp {
             stop_bits: 1,
             parity: false,
             connect_on_startup: false,
+            metermode: MeterMode::VDC,
             scpimode: ScpiMode::IDN,
             confstring: "".to_owned(),
             curr_meas: NAN,
@@ -93,6 +114,7 @@ impl Default for MyApp {
             issue_new_write: false,
             readbuf: [0u8; 1024],
             portlist: VecDeque::with_capacity(11),
+            values: VecDeque::with_capacity(501),
             poll: Poll::new().unwrap(), // if this does not work there's no point in running anyway
             events: Events::with_capacity(1),
             serial: None,
@@ -253,6 +275,8 @@ impl eframe::App for MyApp {
                                             // measurement value mode, store if we got something new
                                             self.curr_meas =
                                                 content.trim_end().parse::<f64>().unwrap_or(NAN);
+                                            self.values.push_front(self.curr_meas);
+                                            self.values.truncate(500);
                                         }
                                     }
                                 }
@@ -359,73 +383,195 @@ impl eframe::App for MyApp {
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    let meter_frame = egui::Frame {
-                        inner_margin: 12.0.into(),
-                        outer_margin: 24.0.into(),
-                        rounding: 5.0.into(),
-                        shadow: epaint::Shadow {
-                            offset: [8.0, 12.0].into(),
-                            blur: 16.0,
-                            spread: 0.0,
-                            color: egui::Color32::from_black_alpha(180),
+                let meter_frame = egui::Frame {
+                    inner_margin: 12.0.into(),
+                    outer_margin: 24.0.into(),
+                    rounding: 5.0.into(),
+                    shadow: epaint::Shadow {
+                        offset: [8.0, 12.0].into(),
+                        blur: 16.0,
+                        spread: 0.0,
+                        color: egui::Color32::from_black_alpha(180),
+                    },
+                    fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
+                    stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                };
+                meter_frame.show(ui, |ui| {
+                    ui.style_mut().wrap = Some(false);
+                    ui.allocate_ui_with_layout(
+                        // TODO this is bad as we actually want the size based on the minimal the fonts need
+                        Vec2 { x: 400.0, y: 300.0 },
+                        egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>10.4}", self.curr_meas))
+                                    .color(egui::Color32::YELLOW)
+                                    .font(FontId {
+                                        size: 60.0,
+                                        family: FontFamily::Name("B612Mono-Bold".into()),
+                                    }),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:>10}", self.curr_unit))
+                                    .color(egui::Color32::YELLOW)
+                                    .font(FontId {
+                                        size: 20.0,
+                                        family: FontFamily::Name("B612Mono-Bold".into()),
+                                    }),
+                            );
                         },
-                        fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
-                        stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
-                    };
-                    meter_frame.show(ui, |ui| {
-                        ui.style_mut().wrap = Some(false);
-                        ui.allocate_ui_with_layout(
-                            // TODO this is bad as we actually want the size based on the minimal the fonts need
-                            Vec2 { x: 400.0, y: 300.0 },
-                            egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new(format!("{:>10.4}", self.curr_meas))
-                                        .color(egui::Color32::YELLOW)
-                                        .font(FontId {
-                                            size: 60.0,
-                                            family: FontFamily::Name("B612Mono-Bold".into()),
-                                        }),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:>10}", self.curr_unit))
-                                        .color(egui::Color32::YELLOW)
-                                        .font(FontId {
-                                            size: 20.0,
-                                            family: FontFamily::Name("B612Mono-Bold".into()),
-                                        }),
-                                );
-                            },
-                        );
+                    );
+                });
+                let control_frame = egui::Frame {
+                    inner_margin: 12.0.into(),
+                    outer_margin: 24.0.into(),
+                    rounding: 5.0.into(),
+                    shadow: epaint::Shadow {
+                        offset: [8.0, 12.0].into(),
+                        blur: 16.0,
+                        spread: 0.0,
+                        color: egui::Color32::from_black_alpha(180),
+                    },
+                    fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
+                    stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                };
+                control_frame.show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        let btn_size = Vec2 { x: 70.0, y: 20.0 };
+                        ui.horizontal(|ui| {
+                            let vdc_btn = egui::Button::new("VDC")
+                                .selected(self.metermode == MeterMode::VDC)
+                                .min_size(btn_size);
+                            if ui.add(vdc_btn).clicked() {
+                                self.metermode = MeterMode::VDC;
+                                self.curr_unit = "VDC".to_owned();
+                                self.confstring = "CONF:VOLT:DC AUTO\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                            let vac_btn = egui::Button::new("VAC")
+                                .selected(self.metermode == MeterMode::VAC)
+                                .min_size(btn_size);
+                            if ui.add(vac_btn).clicked() {
+                                self.metermode = MeterMode::VAC;
+                                self.curr_unit = "VAC".to_owned();
+                                self.confstring = "CONF:VOLT:AC AUTO\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                            let adc_btn = egui::Button::new("ADC")
+                                .selected(self.metermode == MeterMode::ADC)
+                                .min_size(btn_size);
+                            if ui.add(adc_btn).clicked() {
+                                self.metermode = MeterMode::ADC;
+                                self.curr_unit = "ADC".to_owned();
+                                self.confstring = "CONF:CURR:DC AUTO\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                            let aac_btn = egui::Button::new("AAC")
+                                .selected(self.metermode == MeterMode::AAC)
+                                .min_size(btn_size);
+                            if ui.add(aac_btn).clicked() {
+                                self.metermode = MeterMode::AAC;
+                                self.curr_unit = "AAC".to_owned();
+                                self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let res_btn = egui::Button::new("Ohm")
+                                .selected(self.metermode == MeterMode::RES)
+                                .min_size(btn_size);
+                            if ui.add(res_btn).clicked() {
+                                self.metermode = MeterMode::RES;
+                                self.curr_unit = "Ohm".to_owned();
+                                self.confstring = "CONF:RES AUTO\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                            let cap_btn = egui::Button::new("C")
+                                .selected(self.metermode == MeterMode::CAP)
+                                .min_size(btn_size);
+                            if ui.add(cap_btn).clicked() {
+                                self.metermode = MeterMode::CAP;
+                                self.curr_unit = "F".to_owned();
+                                self.confstring = "CONF:CAP AUTO\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                            let freq_btn = egui::Button::new("Freq")
+                                .selected(self.metermode == MeterMode::FREQ)
+                                .min_size(btn_size);
+                            if ui.add(freq_btn).clicked() {
+                                self.metermode = MeterMode::FREQ;
+                                self.curr_unit = "Hz".to_owned();
+                                self.confstring = "CONF:FREQ\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                            let per_btn = egui::Button::new("Period")
+                                .selected(self.metermode == MeterMode::PER)
+                                .min_size(btn_size);
+                            if ui.add(per_btn).clicked() {
+                                self.metermode = MeterMode::PER;
+                                self.curr_unit = "s".to_owned();
+                                self.confstring = "CONF:PER\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let diod_btn = egui::Button::new("Diode")
+                                .selected(self.metermode == MeterMode::DIOD)
+                                .min_size(btn_size);
+                            if ui.add(diod_btn).clicked() {
+                                self.metermode = MeterMode::DIOD;
+                                self.curr_unit = "V".to_owned();
+                                self.confstring = "CONF:DIOD\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                            let cont_btn = egui::Button::new("Cont")
+                                .selected(self.metermode == MeterMode::CONT)
+                                .min_size(btn_size);
+                            if ui.add(cont_btn).clicked() {
+                                self.metermode = MeterMode::CONT;
+                                self.curr_unit = "Ohm".to_owned();
+                                self.confstring = "CONF:DIOD\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                            let cont_btn = egui::Button::new("Temp")
+                                .selected(self.metermode == MeterMode::TEMP)
+                                .min_size(btn_size);
+                            if ui.add(cont_btn).clicked() {
+                                self.metermode = MeterMode::TEMP;
+                                self.curr_unit = "°C".to_owned();
+                                // TODO temp mode needs more selections like sensor typ, unit etc.
+                                self.confstring = "CONF:TEMP:RTD 2\n".to_owned();
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                            }
+                        });
                     });
                 });
-                ui.horizontal(|ui| {
-                    if ui.button("VDC").clicked() {
-                        self.curr_unit = "VDC".to_owned();
-                        self.confstring = "CONF:VOLT:DC AUTO\n".to_owned();
-                        self.scpimode = ScpiMode::CONF;
-                        self.issue_new_write = true;
-                    }
-                    if ui.button("VAC").clicked() {
-                        self.curr_unit = "VAC".to_owned();
-                        self.confstring = "CONF:VOLT:AC AUTO\n".to_owned();
-                        self.scpimode = ScpiMode::CONF;
-                        self.issue_new_write = true;
-                    }
-                    if ui.button("ADC").clicked() {
-                        self.curr_unit = "ADC".to_owned();
-                        self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
-                        self.scpimode = ScpiMode::CONF;
-                        self.issue_new_write = true;
-                    }
-                    if ui.button("AAC").clicked() {
-                        self.curr_unit = "VAC".to_owned();
-                        self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
-                        self.scpimode = ScpiMode::CONF;
-                        self.issue_new_write = true;
-                    }
-                });
+            });
+
+            ui.separator();
+
+            ui.vertical(|ui| {
+                let line = Line::new(PlotPoints::from_ys_f64(&self.values.make_contiguous()));
+                let mut plot = Plot::new("graph")
+                    .legend(Legend::default())
+                    .y_axis_width(4)
+                    .show_axes(true)
+                    .show_grid(true)
+                    .height(400.0);
+                plot.show(ui, |plot_ui| {
+                    plot_ui.line(line);
+                })
             });
 
             ui.separator();
