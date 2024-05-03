@@ -1,6 +1,6 @@
 use std::{
     array,
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     f64::NAN,
     fs::{create_dir_all, read_to_string},
     io::{Read, Write},
@@ -10,7 +10,7 @@ use std::{
 
 use arboard::Clipboard;
 use downloader::{Download, Downloader};
-use egui::{TextEdit, Vec2, Window};
+use egui::{Context, FontData, FontDefinitions, FontFamily, FontId, TextEdit, Vec2, Window};
 use egui_dropdown::DropDownBox;
 use egui_extras::{Column, TableBuilder};
 use glob::glob;
@@ -22,6 +22,7 @@ use regex::Regex;
 use std::io;
 use subprocess::Exec;
 use tempdir::TempDir;
+use tokio::spawn;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -50,6 +51,8 @@ pub struct MyApp {
     confstring: String,
     #[serde(skip)]
     curr_meas: f64,
+    #[serde(skip)]
+    curr_unit: String,
     #[serde(skip)]
     issue_new_write: bool,
     #[serde(skip)]
@@ -86,6 +89,7 @@ impl Default for MyApp {
             scpimode: ScpiMode::IDN,
             confstring: "".to_owned(),
             curr_meas: NAN,
+            curr_unit: "VDC".to_owned(),
             issue_new_write: false,
             readbuf: [0u8; 1024],
             portlist: VecDeque::with_capacity(11),
@@ -107,6 +111,22 @@ impl MyApp {
         // This is also where you can customize the look and feel of egui using
         // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
 
+        let mut fonts = FontDefinitions::default();
+
+        fonts.font_data.insert(
+            "B612Mono-Bold".to_owned(),
+            FontData::from_static(include_bytes!("../assets/fonts/B612Mono-Bold.ttf")),
+        );
+
+        let mut newfam = BTreeMap::new();
+        newfam.insert(
+            FontFamily::Name("B612Mono-Bold".into()),
+            vec!["B612Mono-Bold".to_owned()],
+        );
+        fonts.families.append(&mut newfam);
+
+        cc.egui_ctx.set_fonts(fonts);
+
         // Load previous app state (if any).
         // Note that you must enable the `persistence` feature for this to work.
         if let Some(storage) = cc.storage {
@@ -114,6 +134,19 @@ impl MyApp {
         }
 
         Default::default()
+    }
+
+    fn dispatch_serial_comms(ctx: Context) {
+        println!("Hi in dispatch fn! Serial port!");
+        tokio::spawn(async move {
+            loop {
+                // TODO this is the simple stupid approach
+                // we should only request repaint if the last value has changed
+                // from the previous one
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                ctx.request_repaint();
+            }
+        });
     }
 }
 
@@ -136,6 +169,7 @@ impl eframe::App for MyApp {
                     self.portlist.push_front(p.port_name);
                 }
             }
+
             self.is_init = true
         }
 
@@ -276,7 +310,7 @@ impl eframe::App for MyApp {
                             &mut self.serial_port,
                             |ui, text| ui.selectable_label(false, text),
                         )
-                        .desired_width(800.0)
+                        .desired_width(150.0)
                         .select_on_focus(true)
                         .filter_by_input(false),
                     );
@@ -300,6 +334,11 @@ impl eframe::App for MyApp {
 
                             //kick off first write
                             self.issue_new_write = true;
+
+                            // TODO currently this does not handle the serial comms
+                            // but just request a repaint every 10ms, the serial comms
+                            // happen directly in this UI update function above
+                            Self::dispatch_serial_comms(ctx.clone());
                         }
                     }
                 });
@@ -317,6 +356,45 @@ impl eframe::App for MyApp {
 
             ui.vertical(|ui| {
                 ui.label(&self.curr_meas.to_string());
+                let meter_frame = egui::Frame {
+                    inner_margin: 12.0.into(),
+                    outer_margin: 24.0.into(),
+                    rounding: 5.0.into(),
+                    shadow: epaint::Shadow {
+                        offset: [8.0, 12.0].into(),
+                        blur: 16.0,
+                        spread: 0.0,
+                        color: egui::Color32::from_black_alpha(180),
+                    },
+                    fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
+                    stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                };
+                meter_frame.show(ui, |ui| {
+                    ui.style_mut().wrap = Some(false);
+                    ui.allocate_ui_with_layout(
+                        // TODO this is bad as we actually want the size based on the minimal the fonts need
+                        Vec2 { x: 400.0, y: 300.0 },
+                        egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:>10.4}", self.curr_meas))
+                                    .color(egui::Color32::YELLOW)
+                                    .font(FontId {
+                                        size: 60.0,
+                                        family: FontFamily::Name("B612Mono-Bold".into()),
+                                    }),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:>10}", self.curr_unit))
+                                    .color(egui::Color32::YELLOW)
+                                    .font(FontId {
+                                        size: 20.0,
+                                        family: FontFamily::Name("B612Mono-Bold".into()),
+                                    }),
+                            );
+                        },
+                    );
+                });
                 ui.separator();
 
                 ui.horizontal(|ui| {});
@@ -381,6 +459,8 @@ fn powered_by(ui: &mut egui::Ui) {
             "eframe",
             "https://github.com/emilk/egui/tree/master/crates/eframe",
         );
+        ui.label(", ");
+        ui.hyperlink_to("B612 Font", "https://b612-font.com/");
         ui.label(" and ");
         ui.hyperlink_to(
             "TheHWCave",

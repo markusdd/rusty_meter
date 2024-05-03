@@ -1170,6 +1170,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui_plot"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7854b86dc1c2d352c5270db3d600011daa913d6b554141a03939761323288a1"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "ehttp"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3504,7 +3513,9 @@ dependencies = [
  "egui",
  "egui-dropdown",
  "egui_extras",
+ "egui_plot",
  "env_logger",
+ "epaint",
  "glob",
  "image 0.25.1",
  "indexmap",
@@ -3517,6 +3528,7 @@ dependencies = [
  "serde_json",
  "subprocess",
  "tempdir",
+ "tokio",
  "urlencoding",
  "wasm-bindgen-futures",
 ]
@@ -4023,9 +4035,23 @@ dependencies = [
  "libc",
  "mio",
  "num_cpus",
+ "parking_lot",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2 0.5.7",
+ "tokio-macros",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b8a1e28f2deaa14e508979454cb3a223b10b938b45af148bc0986de36f1923b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.60",
 ]
 
 [[package]]
