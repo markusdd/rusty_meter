@@ -199,6 +199,7 @@ impl eframe::App for MyApp {
                         }
                         ScpiMode::CONF => {
                             self.scpimode = ScpiMode::MEAS;
+                            self.confstring = "".to_owned();
                             // write only command with no return data
                             // go straight to next write
                             self.issue_new_write = true;
@@ -242,8 +243,11 @@ impl eframe::App for MyApp {
                                             self.scpimode = ScpiMode::MEAS;
                                         }
                                         ScpiMode::CONF => {
-                                            // see SYST
-                                            self.scpimode = ScpiMode::MEAS;
+                                            // see SYST, but if we have an outstanding conf
+                                            // string we stay in that state for write to handle it
+                                            if !self.confstring.is_empty() {
+                                                self.scpimode = ScpiMode::MEAS;
+                                            }
                                         }
                                         ScpiMode::MEAS => {
                                             // measurement value mode, store if we got something new
@@ -354,50 +358,74 @@ impl eframe::App for MyApp {
 
             ui.separator();
 
-            ui.vertical(|ui| {
-                ui.label(&self.curr_meas.to_string());
-                let meter_frame = egui::Frame {
-                    inner_margin: 12.0.into(),
-                    outer_margin: 24.0.into(),
-                    rounding: 5.0.into(),
-                    shadow: epaint::Shadow {
-                        offset: [8.0, 12.0].into(),
-                        blur: 16.0,
-                        spread: 0.0,
-                        color: egui::Color32::from_black_alpha(180),
-                    },
-                    fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
-                    stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
-                };
-                meter_frame.show(ui, |ui| {
-                    ui.style_mut().wrap = Some(false);
-                    ui.allocate_ui_with_layout(
-                        // TODO this is bad as we actually want the size based on the minimal the fonts need
-                        Vec2 { x: 400.0, y: 300.0 },
-                        egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{:>10.4}", self.curr_meas))
-                                    .color(egui::Color32::YELLOW)
-                                    .font(FontId {
-                                        size: 60.0,
-                                        family: FontFamily::Name("B612Mono-Bold".into()),
-                                    }),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("{:>10}", self.curr_unit))
-                                    .color(egui::Color32::YELLOW)
-                                    .font(FontId {
-                                        size: 20.0,
-                                        family: FontFamily::Name("B612Mono-Bold".into()),
-                                    }),
-                            );
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    let meter_frame = egui::Frame {
+                        inner_margin: 12.0.into(),
+                        outer_margin: 24.0.into(),
+                        rounding: 5.0.into(),
+                        shadow: epaint::Shadow {
+                            offset: [8.0, 12.0].into(),
+                            blur: 16.0,
+                            spread: 0.0,
+                            color: egui::Color32::from_black_alpha(180),
                         },
-                    );
+                        fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
+                        stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                    };
+                    meter_frame.show(ui, |ui| {
+                        ui.style_mut().wrap = Some(false);
+                        ui.allocate_ui_with_layout(
+                            // TODO this is bad as we actually want the size based on the minimal the fonts need
+                            Vec2 { x: 400.0, y: 300.0 },
+                            egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{:>10.4}", self.curr_meas))
+                                        .color(egui::Color32::YELLOW)
+                                        .font(FontId {
+                                            size: 60.0,
+                                            family: FontFamily::Name("B612Mono-Bold".into()),
+                                        }),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("{:>10}", self.curr_unit))
+                                        .color(egui::Color32::YELLOW)
+                                        .font(FontId {
+                                            size: 20.0,
+                                            family: FontFamily::Name("B612Mono-Bold".into()),
+                                        }),
+                                );
+                            },
+                        );
+                    });
                 });
-                ui.separator();
-
-                ui.horizontal(|ui| {});
+                ui.horizontal(|ui| {
+                    if ui.button("VDC").clicked() {
+                        self.curr_unit = "VDC".to_owned();
+                        self.confstring = "CONF:VOLT:DC AUTO\n".to_owned();
+                        self.scpimode = ScpiMode::CONF;
+                        self.issue_new_write = true;
+                    }
+                    if ui.button("VAC").clicked() {
+                        self.curr_unit = "VAC".to_owned();
+                        self.confstring = "CONF:VOLT:AC AUTO\n".to_owned();
+                        self.scpimode = ScpiMode::CONF;
+                        self.issue_new_write = true;
+                    }
+                    if ui.button("ADC").clicked() {
+                        self.curr_unit = "ADC".to_owned();
+                        self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
+                        self.scpimode = ScpiMode::CONF;
+                        self.issue_new_write = true;
+                    }
+                    if ui.button("AAC").clicked() {
+                        self.curr_unit = "VAC".to_owned();
+                        self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
+                        self.scpimode = ScpiMode::CONF;
+                        self.issue_new_write = true;
+                    }
+                });
             });
 
             ui.separator();
