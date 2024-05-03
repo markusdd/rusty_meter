@@ -29,6 +29,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SERIAL_TOKEN: Token = Token(0);
 
+const MEM_DEPTH_DEFAULT: usize = 500;
+
 enum ScpiMode {
     IDN,
     CONF,
@@ -60,6 +62,7 @@ pub struct MyApp {
     bits: u32,
     stop_bits: u32,
     parity: bool,
+    mem_depth: usize,
     connect_on_startup: bool,
     #[serde(skip)]
     metermode: MeterMode,
@@ -105,6 +108,7 @@ impl Default for MyApp {
             bits: 8,
             stop_bits: 1,
             parity: false,
+            mem_depth: MEM_DEPTH_DEFAULT,
             connect_on_startup: false,
             metermode: MeterMode::VDC,
             scpimode: ScpiMode::IDN,
@@ -114,7 +118,7 @@ impl Default for MyApp {
             issue_new_write: false,
             readbuf: [0u8; 1024],
             portlist: VecDeque::with_capacity(11),
-            values: VecDeque::with_capacity(501),
+            values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
             poll: Poll::new().unwrap(), // if this does not work there's no point in running anyway
             events: Events::with_capacity(1),
             serial: None,
@@ -275,8 +279,10 @@ impl eframe::App for MyApp {
                                             // measurement value mode, store if we got something new
                                             self.curr_meas =
                                                 content.trim_end().parse::<f64>().unwrap_or(NAN);
-                                            self.values.push_front(self.curr_meas);
-                                            self.values.truncate(500);
+                                            self.values.push_back(self.curr_meas);
+                                            if self.values.len() > self.mem_depth {
+                                                self.values.pop_front();
+                                            }
                                         }
                                     }
                                 }
@@ -568,7 +574,8 @@ impl eframe::App for MyApp {
                     .y_axis_width(4)
                     .show_axes(true)
                     .show_grid(true)
-                    .height(400.0);
+                    .height(400.0)
+                    .include_x(self.mem_depth as f64);
                 plot.show(ui, |plot_ui| {
                     plot_ui.line(line);
                 })
