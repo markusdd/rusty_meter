@@ -53,6 +53,27 @@ enum MeterMode {
     TEMP,
 }
 
+pub struct RateCmd {
+    scpi: String,
+    opts: IndexMap<String, String>,
+}
+
+impl Default for RateCmd {
+    // this corresponds to OWON XDM1041
+    fn default() -> Self {
+        Self {
+            scpi: "RATE ".to_owned(),
+            opts: indexmap! {"Slow".to_owned() => "S".to_owned(), "Medium".to_owned() => "M".to_owned(), "Fast".to_owned() => "F".to_owned()},
+        }
+    }
+}
+
+impl RateCmd {
+    pub fn gen_scpi(&self, opt_name: &str) -> String {
+        return format!("{}{}\n", self.scpi, self.opts[opt_name]);
+    }
+}
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
@@ -64,6 +85,7 @@ pub struct MyApp {
     parity: bool,
     mem_depth: usize,
     connect_on_startup: bool,
+    value_debug: bool,
     #[serde(skip)]
     metermode: MeterMode,
     #[serde(skip)]
@@ -98,6 +120,10 @@ pub struct MyApp {
     settings_open: bool,
     #[serde(skip)]
     is_init: bool,
+    #[serde(skip)]
+    ratecmd: RateCmd,
+    #[serde(skip)]
+    curr_rate: usize,
 }
 
 impl Default for MyApp {
@@ -110,10 +136,11 @@ impl Default for MyApp {
             parity: false,
             mem_depth: MEM_DEPTH_DEFAULT,
             connect_on_startup: false,
+            value_debug: false,
             metermode: MeterMode::VDC,
             scpimode: ScpiMode::IDN,
             confstring: "".to_owned(),
-            curr_meas: NAN,
+            curr_meas: f64::NAN,
             curr_unit: "VDC".to_owned(),
             issue_new_write: false,
             readbuf: [0u8; 1024],
@@ -127,6 +154,8 @@ impl Default for MyApp {
             tempdir: TempDir::new("rustymeter").ok(),
             settings_open: false,
             is_init: false,
+            ratecmd: RateCmd::default(),
+            curr_rate: 0,
         }
     }
 }
@@ -163,7 +192,7 @@ impl MyApp {
     }
 
     fn dispatch_serial_comms(ctx: Context) {
-        println!("Hi in dispatch fn! Serial port!");
+        // println!("Hi in dispatch fn! Serial port!");
         tokio::spawn(async move {
             loop {
                 // TODO this is the simple stupid approach
@@ -250,7 +279,9 @@ impl eframe::App for MyApp {
                             Ok(count) => {
                                 //println!("Count read: {:?}", count);
                                 let content = String::from_utf8_lossy(&self.readbuf[..count]);
-                                println!("{:?}", content);
+                                if self.value_debug {
+                                    println!("{:?}", content);
+                                }
                                 // do not send a new request until we have the result of the old one
                                 // OWON terminates everything with \r\n
                                 if content.ends_with("\r\n") {
@@ -574,6 +605,20 @@ impl eframe::App for MyApp {
                         });
                     });
                 });
+                let ratebox = egui::ComboBox::from_label("Sampling Rate").show_index(
+                    ui,
+                    &mut self.curr_rate,
+                    self.ratecmd.opts.len(),
+                    |i| self.ratecmd.opts.get_index(i).unwrap().0,
+                );
+                if ratebox.changed() {
+                    self.confstring = self
+                        .ratecmd
+                        .gen_scpi(self.ratecmd.opts.get_index(self.curr_rate).unwrap().0);
+                    self.scpimode = ScpiMode::CONF;
+                    self.issue_new_write = true;
+                    println!("Selected Rate changed: {}", self.confstring);
+                }
             });
 
             ui.separator();
@@ -616,6 +661,7 @@ impl eframe::App for MyApp {
                                 &mut self.parity,
                                 "Use parity bit (ignored right now, always None)",
                             );
+                            ui.checkbox(&mut self.value_debug, "Value debug (print to CLI)");
                             ui.label("Baud rate:");
                             ui.add(
                                 TextEdit::singleline(&mut self.baud_rate.to_string())
