@@ -13,6 +13,20 @@ with neat graphing, recording, using it on stream etc.
 Eventually, as this is all SCPI based, it could also be extended to other meters that have SCPI interfaces.
 Maybe some stuff even works out of the box.
 
+**NOTE:** This is work and progress and I have more features for this in mind. what works right now is connecting to the multimeter, switching modes and ranges as well as sampling rates. You also get nice graphing for the last 500 samples.
+
+**TODO:**
+
+- context aware formatting of the value display (currently goes out of bounds for e.g. large resistance values)
+- math modes
+- continuity threshold
+- beeper control
+- code refactoring for easier integration of other meters
+- make serial parameters changeable
+- only record values that have changed to the previous one
+- move from dumb 'every 10ms repaint' to a more serial event triggered update mechanism in a seperate tokio thread
+- csv record export
+
 ## How to get going
 
 You can clone this repository and just run `cargo build --release`, provided you have rust installed (use `rustup`, it's easy).

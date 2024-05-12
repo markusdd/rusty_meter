@@ -1,6 +1,6 @@
 use std::{
     array,
-    collections::{BTreeMap, VecDeque},
+    collections::{btree_map::Range, BTreeMap, VecDeque},
     f64::NAN,
     fs::{create_dir_all, read_to_string},
     io::{Read, Write},
@@ -19,6 +19,7 @@ use indexmap::{indexmap, IndexMap};
 use mio::{Events, Interest, Poll, Token};
 use mio_serial::{DataBits, SerialPort, SerialPortInfo};
 use mio_serial::{SerialPortBuilderExt, SerialStream};
+use phf::{phf_ordered_map, OrderedMap};
 use regex::Regex;
 use std::io;
 use subprocess::Exec;
@@ -30,6 +31,14 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SERIAL_TOKEN: Token = Token(0);
 
 const MEM_DEPTH_DEFAULT: usize = 500;
+
+/// A trait that must be implemented for all SCPI command structs.
+/// Gets passed the struct instance itself and the selected option name
+/// and must return a complete SCPI command string (including newline)
+/// that can be sent via serial or LXI to the target device.
+pub trait GenScpi {
+    fn gen_scpi(&self, opt_name: &str) -> String;
+}
 
 enum ScpiMode {
     IDN,
@@ -54,23 +63,156 @@ enum MeterMode {
 }
 
 pub struct RateCmd {
-    scpi: String,
-    opts: IndexMap<String, String>,
+    scpi: &'static str,
+    opts: OrderedMap<&'static str, &'static str>,
 }
 
 impl Default for RateCmd {
     // this corresponds to OWON XDM1041
     fn default() -> Self {
         Self {
-            scpi: "RATE ".to_owned(),
-            opts: indexmap! {"Slow".to_owned() => "S".to_owned(), "Medium".to_owned() => "M".to_owned(), "Fast".to_owned() => "F".to_owned()},
+            scpi: "RATE ",
+            opts: phf_ordered_map! {
+                "Slow" => "S",
+                "Medium" => "M",
+                "Fast" => "F",
+            },
         }
     }
 }
 
-impl RateCmd {
-    pub fn gen_scpi(&self, opt_name: &str) -> String {
+impl GenScpi for RateCmd {
+    fn gen_scpi(&self, opt_name: &str) -> String {
         return format!("{}{}\n", self.scpi, self.opts[opt_name]);
+    }
+}
+
+pub struct RangeCmd {
+    scpi: &'static str,
+    opts: OrderedMap<&'static str, &'static str>,
+}
+
+impl Default for RangeCmd {
+    // this corresponds to OWON XDM1041 VDC ranges
+    fn default() -> Self {
+        Self {
+            scpi: "CONF:VOLT:DC ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "50mV" => "50E-3",
+                "500mV" => "500E-3",
+                "5V" => "5",
+                "50V" => "50",
+                "500V" => "500",
+                "1000V" => "1000",
+            },
+        }
+    }
+}
+
+impl GenScpi for RangeCmd {
+    fn gen_scpi(&self, opt_name: &str) -> String {
+        return format!("{}{}\n", self.scpi, self.opts[opt_name]);
+    }
+}
+
+impl RangeCmd {
+    fn new(meter: &str, mode: &str) -> Option<Self> {
+        match (meter, mode) {
+            ("OWON XDM1041", "VDC") => Some(Self::default()),
+            ("OWON XDM1041", "VAC") => Some(Self::owon_xdm1041_vac()),
+            ("OWON XDM1041", "ADC") => Some(Self::owon_xdm1041_adc()),
+            ("OWON XDM1041", "AAC") => Some(Self::owon_xdm1041_aac()),
+            ("OWON XDM1041", "RES") => Some(Self::owon_xdm1041_res()),
+            ("OWON XDM1041", "CAP") => Some(Self::owon_xdm1041_cap()),
+            ("OWON XDM1041", "TEMP") => Some(Self::owon_xdm1041_temp()),
+            _ => None,
+        }
+    }
+
+    fn owon_xdm1041_vac() -> Self {
+        Self {
+            scpi: "CONF:VOLT:AC ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "500mV" => "500E-3",
+                "5V" => "5",
+                "50V" => "50",
+                "500V" => "500",
+                "750V" => "750",
+            },
+        }
+    }
+
+    fn owon_xdm1041_adc() -> Self {
+        Self {
+            scpi: "CONF:CURR:DC ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "500uA" => "500E-6",
+                "5mA" => "5E-3",
+                "50mA" => "50E-3",
+                "500mA" => "500E-3",
+                "5A" => "5",
+                "10A" => "10",
+            },
+        }
+    }
+
+    fn owon_xdm1041_aac() -> Self {
+        Self {
+            scpi: "CONF:CURR:AC ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "500uA" => "500E-6",
+                "5mA" => "5E-3",
+                "50mA" => "50E-3",
+                "500mA" => "500E-3",
+                "5A" => "5",
+                "10A" => "10",
+            },
+        }
+    }
+
+    fn owon_xdm1041_res() -> Self {
+        Self {
+            scpi: "CONF:RES ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "500Ohm" => "500",
+                "5kOhm" => "5E3",
+                "50kOhm" => "50E3",
+                "500kOhm" => "500E3",
+                "5MOhm" => "5E6",
+                "50MOhm" => "50E6",
+            },
+        }
+    }
+
+    fn owon_xdm1041_cap() -> Self {
+        Self {
+            scpi: "CONF:CAP ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "50nF" => "50E-9",
+                "500nF" => "500E-9",
+                "5uF" => "5E-6",
+                "50uF" => "50E-6",
+                "500uF" => "500E-6",
+                "5mF" => "5E-3",
+                "50mF" => "50E-3",
+            },
+        }
+    }
+
+    fn owon_xdm1041_temp() -> Self {
+        Self {
+            scpi: "CONF:TEMP_RTD ",
+            opts: phf_ordered_map! {
+                "PT100" => "PT100",
+                "K-type (KITS90)" => "KITS90",
+            },
+        }
     }
 }
 
@@ -86,6 +228,8 @@ pub struct MyApp {
     mem_depth: usize,
     connect_on_startup: bool,
     value_debug: bool,
+    #[serde(skip)]
+    curr_meter: String,
     #[serde(skip)]
     metermode: MeterMode,
     #[serde(skip)]
@@ -124,6 +268,10 @@ pub struct MyApp {
     ratecmd: RateCmd,
     #[serde(skip)]
     curr_rate: usize,
+    #[serde(skip)]
+    rangecmd: Option<RangeCmd>,
+    #[serde(skip)]
+    curr_range: usize,
 }
 
 impl Default for MyApp {
@@ -137,6 +285,7 @@ impl Default for MyApp {
             mem_depth: MEM_DEPTH_DEFAULT,
             connect_on_startup: false,
             value_debug: false,
+            curr_meter: "OWON XDM1041".to_owned(),
             metermode: MeterMode::VDC,
             scpimode: ScpiMode::IDN,
             confstring: "".to_owned(),
@@ -156,6 +305,8 @@ impl Default for MyApp {
             is_init: false,
             ratecmd: RateCmd::default(),
             curr_rate: 0,
+            rangecmd: Some(RangeCmd::default()),
+            curr_range: 0,
         }
     }
 }
@@ -486,6 +637,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "VDC");
+                                self.curr_range = 0;
                             }
                             let vac_btn = egui::Button::new("VAC")
                                 .selected(self.metermode == MeterMode::VAC)
@@ -497,6 +650,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "VAC");
+                                self.curr_range = 0;
                             }
                             let adc_btn = egui::Button::new("ADC")
                                 .selected(self.metermode == MeterMode::ADC)
@@ -508,6 +663,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "ADC");
+                                self.curr_range = 0;
                             }
                             let aac_btn = egui::Button::new("AAC")
                                 .selected(self.metermode == MeterMode::AAC)
@@ -519,6 +676,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "AAC");
+                                self.curr_range = 0;
                             }
                         });
                         ui.horizontal(|ui| {
@@ -532,6 +691,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "RES");
+                                self.curr_range = 0;
                             }
                             let cap_btn = egui::Button::new("C")
                                 .selected(self.metermode == MeterMode::CAP)
@@ -543,6 +704,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "CAP");
+                                self.curr_range = 0;
                             }
                             let freq_btn = egui::Button::new("Freq")
                                 .selected(self.metermode == MeterMode::FREQ)
@@ -554,6 +717,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "FREQ");
+                                self.curr_range = 0;
                             }
                             let per_btn = egui::Button::new("Period")
                                 .selected(self.metermode == MeterMode::PER)
@@ -565,6 +730,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "PER");
+                                self.curr_range = 0;
                             }
                         });
                         ui.horizontal(|ui| {
@@ -578,6 +745,8 @@ impl eframe::App for MyApp {
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "DIOD");
+                                self.curr_range = 0;
                             }
                             let cont_btn = egui::Button::new("Cont")
                                 .selected(self.metermode == MeterMode::CONT)
@@ -585,10 +754,12 @@ impl eframe::App for MyApp {
                             if ui.add(cont_btn).clicked() {
                                 self.metermode = MeterMode::CONT;
                                 self.curr_unit = "Ohm".to_owned();
-                                self.confstring = "CONF:DIOD\n".to_owned();
+                                self.confstring = "CONF:CONT\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "CONT");
+                                self.curr_range = 0;
                             }
                             let cont_btn = egui::Button::new("Temp")
                                 .selected(self.metermode == MeterMode::TEMP)
@@ -597,28 +768,62 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::TEMP;
                                 self.curr_unit = "°C".to_owned();
                                 // TODO temp mode needs more selections like sensor typ, unit etc.
-                                self.confstring = "CONF:TEMP:RTD 2\n".to_owned();
+                                self.confstring = "CONF:TEMP:RTD PT100\n".to_owned();
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
+                                self.rangecmd = RangeCmd::new(&self.curr_meter, "TEMP");
+                                self.curr_range = 0;
                             }
                         });
                     });
                 });
-                let ratebox = egui::ComboBox::from_label("Sampling Rate").show_index(
-                    ui,
-                    &mut self.curr_rate,
-                    self.ratecmd.opts.len(),
-                    |i| self.ratecmd.opts.get_index(i).unwrap().0,
-                );
-                if ratebox.changed() {
-                    self.confstring = self
-                        .ratecmd
-                        .gen_scpi(self.ratecmd.opts.get_index(self.curr_rate).unwrap().0);
-                    self.scpimode = ScpiMode::CONF;
-                    self.issue_new_write = true;
-                    println!("Selected Rate changed: {}", self.confstring);
-                }
+                let options_frame = egui::Frame {
+                    inner_margin: 12.0.into(),
+                    outer_margin: 24.0.into(),
+                    rounding: 5.0.into(),
+                    shadow: epaint::Shadow {
+                        offset: [8.0, 12.0].into(),
+                        blur: 16.0,
+                        spread: 0.0,
+                        color: egui::Color32::from_black_alpha(180),
+                    },
+                    fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
+                    stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                };
+                options_frame.show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        let ratebox = egui::ComboBox::from_label("Sampling Rate").show_index(
+                            ui,
+                            &mut self.curr_rate,
+                            self.ratecmd.opts.len(),
+                            |i| *self.ratecmd.opts.index(i).unwrap().0,
+                        );
+                        if ratebox.changed() {
+                            self.confstring = self
+                                .ratecmd
+                                .gen_scpi(self.ratecmd.opts.index(self.curr_rate).unwrap().0);
+                            self.scpimode = ScpiMode::CONF;
+                            self.issue_new_write = true;
+                            println!("Selected Rate changed: {}", self.confstring);
+                        }
+                        if let Some(rangecmd) = &self.rangecmd {
+                            let rangebox = egui::ComboBox::from_label("Range").show_index(
+                                ui,
+                                &mut self.curr_range,
+                                rangecmd.opts.len(),
+                                |i| *rangecmd.opts.index(i).unwrap().0,
+                            );
+                            if rangebox.changed() {
+                                self.confstring = rangecmd
+                                    .gen_scpi(rangecmd.opts.index(self.curr_range).unwrap().0);
+                                self.scpimode = ScpiMode::CONF;
+                                self.issue_new_write = true;
+                                println!("Selected Rate changed: {}", self.confstring);
+                            }
+                        }
+                    });
+                });
             });
 
             ui.separator();
