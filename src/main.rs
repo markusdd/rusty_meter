@@ -33,8 +33,10 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([300.0, 220.0])
             .with_title("RustyMeter")
             .with_icon(
-                eframe::icon_data::from_png_bytes(&include_bytes!("../assets/cpu.png")[..])
-                    .unwrap(),
+                eframe::icon_data::from_png_bytes(
+                    &include_bytes!("../assets/chart-line-solid.png")[..],
+                )
+                .unwrap(),
             ),
         ..Default::default()
     };

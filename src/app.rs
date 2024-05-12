@@ -805,7 +805,9 @@ impl eframe::App for MyApp {
                                 .gen_scpi(self.ratecmd.opts.index(self.curr_rate).unwrap().0);
                             self.scpimode = ScpiMode::CONF;
                             self.issue_new_write = true;
-                            println!("Selected Rate changed: {}", self.confstring);
+                            if self.value_debug {
+                                println!("Selected Rate changed: {}", self.confstring);
+                            }
                         }
                         if let Some(rangecmd) = &self.rangecmd {
                             let rangebox = egui::ComboBox::from_label("Range").show_index(
@@ -819,7 +821,9 @@ impl eframe::App for MyApp {
                                     .gen_scpi(rangecmd.opts.index(self.curr_range).unwrap().0);
                                 self.scpimode = ScpiMode::CONF;
                                 self.issue_new_write = true;
-                                println!("Selected Rate changed: {}", self.confstring);
+                                if self.value_debug {
+                                    println!("Selected Range changed: {}", self.confstring);
+                                }
                             }
                         }
                     });
