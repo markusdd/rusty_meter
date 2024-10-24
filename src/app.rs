@@ -1,30 +1,19 @@
 use std::{
-    array,
-    collections::{btree_map::Range, BTreeMap, VecDeque},
+    collections::{BTreeMap, VecDeque},
     f64::NAN,
-    fs::{create_dir_all, read_to_string},
     io::{Read, Write},
-    path::Path,
     time::Duration,
 };
 
-use arboard::Clipboard;
-use downloader::{Download, Downloader};
 use egui::{Context, FontData, FontDefinitions, FontFamily, FontId, TextEdit, Vec2, Window};
 use egui_dropdown::DropDownBox;
-use egui_extras::{Column, TableBuilder};
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use glob::glob;
-use indexmap::{indexmap, IndexMap};
 use mio::{Events, Interest, Poll, Token};
 use mio_serial::{DataBits, SerialPort, SerialPortInfo};
 use mio_serial::{SerialPortBuilderExt, SerialStream};
 use phf::{phf_ordered_map, OrderedMap};
-use regex::Regex;
 use std::io;
-use subprocess::Exec;
-use tempdir::TempDir;
-use tokio::spawn;
+use tempfile::{Builder, TempDir};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -300,7 +289,7 @@ impl Default for MyApp {
             serial: None,
             device: "".to_owned(),
             ports: vec![],
-            tempdir: TempDir::new("rustymeter").ok(),
+            tempdir: Builder::new().prefix("rustymeter").tempdir().ok(),
             settings_open: false,
             is_init: false,
             ratecmd: RateCmd::default(),
@@ -504,7 +493,7 @@ impl eframe::App for MyApp {
                 });
                 ui.add_space(16.0);
 
-                egui::widgets::global_dark_light_mode_buttons(ui);
+                egui::widgets::global_theme_preference_buttons(ui);
             });
         });
 
@@ -585,7 +574,7 @@ impl eframe::App for MyApp {
                     stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
                 };
                 meter_frame.show(ui, |ui| {
-                    ui.style_mut().wrap = Some(false);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.allocate_ui_with_layout(
                         // TODO this is bad as we actually want the size based on the minimal the fonts need
                         Vec2 { x: 400.0, y: 300.0 },
@@ -836,7 +825,7 @@ impl eframe::App for MyApp {
                 let line = Line::new(PlotPoints::from_ys_f64(&self.values.make_contiguous()));
                 let mut plot = Plot::new("graph")
                     .legend(Legend::default())
-                    .y_axis_width(4)
+                    .y_axis_min_width(4.0)
                     .show_axes(true)
                     .show_grid(true)
                     .height(400.0)

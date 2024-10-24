@@ -47,7 +47,7 @@ fn main() -> eframe::Result<()> {
             // This gives us image support:
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Box::new(rusty_meter::MyApp::new(cc))
+            Ok(Box::new(rusty_meter::MyApp::new(cc)))
         }),
     )
 }
