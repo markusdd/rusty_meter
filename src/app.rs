@@ -73,7 +73,7 @@ impl Default for RateCmd {
 
 impl GenScpi for RateCmd {
     fn gen_scpi(&self, opt_name: &str) -> String {
-        return format!("{}{}\n", self.scpi, self.opts[opt_name]);
+        format!("{}{}\n", self.scpi, self.opts[opt_name])
     }
 }
 
@@ -102,7 +102,7 @@ impl Default for RangeCmd {
 
 impl GenScpi for RangeCmd {
     fn gen_scpi(&self, opt_name: &str) -> String {
-        return format!("{}{}\n", self.scpi, self.opts[opt_name]);
+        format!("{}{}\n", self.scpi, self.opts[opt_name])
     }
 }
 
@@ -379,14 +379,13 @@ impl eframe::App for MyApp {
             //println!("Poll: {:?}", res);
 
             if self.issue_new_write {
-                let sendstring;
-                match self.scpimode {
-                    ScpiMode::IDN => sendstring = "*IDN?\n",
-                    ScpiMode::SYST => sendstring = "SYST:REM\n",
-                    ScpiMode::CONF => sendstring = &self.confstring, // TODO update UI only when sent successfully
-                    ScpiMode::MEAS => sendstring = "MEAS?\n",
-                }
-                let res = serial.write_all(&sendstring.as_bytes());
+                let sendstring = match self.scpimode {
+                    ScpiMode::IDN => "*IDN?\n",
+                    ScpiMode::SYST => "SYST:REM\n",
+                    ScpiMode::CONF => &self.confstring, // TODO update UI only when sent successfully
+                    ScpiMode::MEAS => "MEAS?\n",
+                };
+                let res = serial.write_all(sendstring.as_bytes());
                 if res.is_ok() {
                     match self.scpimode {
                         ScpiMode::SYST => {
@@ -451,8 +450,10 @@ impl eframe::App for MyApp {
                                         }
                                         ScpiMode::MEAS => {
                                             // measurement value mode, store if we got something new
-                                            self.curr_meas =
-                                                content.trim_end().parse::<f64>().unwrap_or(NAN);
+                                            self.curr_meas = content
+                                                .trim_end()
+                                                .parse::<f64>()
+                                                .unwrap_or(f64::NAN);
                                             self.values.push_back(self.curr_meas);
                                             if self.values.len() > self.mem_depth {
                                                 self.values.pop_front();
@@ -488,10 +489,8 @@ impl eframe::App for MyApp {
                     if ui.button("Settings").clicked() {
                         self.settings_open = true;
                     }
-                    if !is_web {
-                        if ui.button("Quit").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
+                    if !is_web && ui.button("Quit").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
                 ui.add_space(16.0);
@@ -825,7 +824,7 @@ impl eframe::App for MyApp {
             ui.separator();
 
             ui.vertical(|ui| {
-                let line = Line::new(PlotPoints::from_ys_f64(&self.values.make_contiguous()));
+                let line = Line::new(PlotPoints::from_ys_f64(self.values.make_contiguous()));
                 let plot = Plot::new("graph")
                     .legend(Legend::default())
                     .y_axis_min_width(4.0)
