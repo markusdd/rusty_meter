@@ -826,7 +826,7 @@ impl eframe::App for MyApp {
 
             ui.vertical(|ui| {
                 let line = Line::new(PlotPoints::from_ys_f64(&self.values.make_contiguous()));
-                let mut plot = Plot::new("graph")
+                let plot = Plot::new("graph")
                     .legend(Legend::default())
                     .y_axis_min_width(4.0)
                     .show_axes(true)
