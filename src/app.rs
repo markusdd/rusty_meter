@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     f64::NAN,
     io::{Read, Write},
+    sync::Arc,
     time::Duration,
 };
 
@@ -310,7 +311,9 @@ impl MyApp {
 
         fonts.font_data.insert(
             "B612Mono-Bold".to_owned(),
-            FontData::from_static(include_bytes!("../assets/fonts/B612Mono-Bold.ttf")),
+            Arc::new(FontData::from_static(include_bytes!(
+                "../assets/fonts/B612Mono-Bold.ttf"
+            ))),
         );
 
         let mut newfam = BTreeMap::new();
