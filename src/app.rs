@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, VecDeque},
-    f64::NAN,
     io::{Read, Write},
     sync::Arc,
     time::Duration,
@@ -31,25 +30,25 @@ pub trait GenScpi {
 }
 
 enum ScpiMode {
-    IDN,
-    CONF,
-    SYST,
-    MEAS,
+    Idn,
+    Conf,
+    Syst,
+    Meas,
 }
 
 #[derive(PartialEq)]
 enum MeterMode {
-    VDC,
-    VAC,
-    ADC,
-    AAC,
-    RES,
-    CAP,
-    FREQ,
-    PER,
-    DIOD,
-    CONT,
-    TEMP,
+    Vdc,
+    Vac,
+    Adc,
+    Aac,
+    Res,
+    Cap,
+    Freq,
+    Per,
+    Diod,
+    Cont,
+    Temp,
 }
 
 pub struct RateCmd {
@@ -276,8 +275,8 @@ impl Default for MyApp {
             connect_on_startup: false,
             value_debug: false,
             curr_meter: "OWON XDM1041".to_owned(),
-            metermode: MeterMode::VDC,
-            scpimode: ScpiMode::IDN,
+            metermode: MeterMode::Vdc,
+            scpimode: ScpiMode::Idn,
             confstring: "".to_owned(),
             curr_meas: f64::NAN,
             curr_unit: "VDC".to_owned(),
@@ -380,22 +379,22 @@ impl eframe::App for MyApp {
 
             if self.issue_new_write {
                 let sendstring = match self.scpimode {
-                    ScpiMode::IDN => "*IDN?\n",
-                    ScpiMode::SYST => "SYST:REM\n",
-                    ScpiMode::CONF => &self.confstring, // TODO update UI only when sent successfully
-                    ScpiMode::MEAS => "MEAS?\n",
+                    ScpiMode::Idn => "*IDN?\n",
+                    ScpiMode::Syst => "SYST:REM\n",
+                    ScpiMode::Conf => &self.confstring, // TODO update UI only when sent successfully
+                    ScpiMode::Meas => "MEAS?\n",
                 };
                 let res = serial.write_all(sendstring.as_bytes());
                 if res.is_ok() {
                     match self.scpimode {
-                        ScpiMode::SYST => {
-                            self.scpimode = ScpiMode::MEAS;
+                        ScpiMode::Syst => {
+                            self.scpimode = ScpiMode::Meas;
                             // write only command with no return data
                             // go straight to next write
                             self.issue_new_write = true;
                         }
-                        ScpiMode::CONF => {
-                            self.scpimode = ScpiMode::MEAS;
+                        ScpiMode::Conf => {
+                            self.scpimode = ScpiMode::Meas;
                             self.confstring = "".to_owned();
                             // write only command with no return data
                             // go straight to next write
@@ -429,26 +428,26 @@ impl eframe::App for MyApp {
                                 if content.ends_with("\r\n") {
                                     self.issue_new_write = true;
                                     match self.scpimode {
-                                        ScpiMode::IDN => {
+                                        ScpiMode::Idn => {
                                             // Device ID string received, save it for UI
                                             // and move on to SYST mode
                                             self.device = content.trim_end().to_owned();
-                                            self.scpimode = ScpiMode::SYST;
+                                            self.scpimode = ScpiMode::Syst;
                                         }
-                                        ScpiMode::SYST => {
+                                        ScpiMode::Syst => {
                                             // no read data, SYST commands await no response
                                             // if anything came we just ignore it
                                             // change to measurement mode right after
-                                            self.scpimode = ScpiMode::MEAS;
+                                            self.scpimode = ScpiMode::Meas;
                                         }
-                                        ScpiMode::CONF => {
+                                        ScpiMode::Conf => {
                                             // see SYST, but if we have an outstanding conf
                                             // string we stay in that state for write to handle it
                                             if !self.confstring.is_empty() {
-                                                self.scpimode = ScpiMode::MEAS;
+                                                self.scpimode = ScpiMode::Meas;
                                             }
                                         }
-                                        ScpiMode::MEAS => {
+                                        ScpiMode::Meas => {
                                             // measurement value mode, store if we got something new
                                             self.curr_meas = content
                                                 .trim_end()
@@ -619,52 +618,52 @@ impl eframe::App for MyApp {
                         let btn_size = Vec2 { x: 70.0, y: 20.0 };
                         ui.horizontal(|ui| {
                             let vdc_btn = egui::Button::new("VDC")
-                                .selected(self.metermode == MeterMode::VDC)
+                                .selected(self.metermode == MeterMode::Vdc)
                                 .min_size(btn_size);
                             if ui.add(vdc_btn).clicked() {
-                                self.metermode = MeterMode::VDC;
+                                self.metermode = MeterMode::Vdc;
                                 self.curr_unit = "VDC".to_owned();
                                 self.confstring = "CONF:VOLT:DC AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "VDC");
                                 self.curr_range = 0;
                             }
                             let vac_btn = egui::Button::new("VAC")
-                                .selected(self.metermode == MeterMode::VAC)
+                                .selected(self.metermode == MeterMode::Vac)
                                 .min_size(btn_size);
                             if ui.add(vac_btn).clicked() {
-                                self.metermode = MeterMode::VAC;
+                                self.metermode = MeterMode::Vac;
                                 self.curr_unit = "VAC".to_owned();
                                 self.confstring = "CONF:VOLT:AC AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "VAC");
                                 self.curr_range = 0;
                             }
                             let adc_btn = egui::Button::new("ADC")
-                                .selected(self.metermode == MeterMode::ADC)
+                                .selected(self.metermode == MeterMode::Adc)
                                 .min_size(btn_size);
                             if ui.add(adc_btn).clicked() {
-                                self.metermode = MeterMode::ADC;
+                                self.metermode = MeterMode::Adc;
                                 self.curr_unit = "ADC".to_owned();
                                 self.confstring = "CONF:CURR:DC AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "ADC");
                                 self.curr_range = 0;
                             }
                             let aac_btn = egui::Button::new("AAC")
-                                .selected(self.metermode == MeterMode::AAC)
+                                .selected(self.metermode == MeterMode::Aac)
                                 .min_size(btn_size);
                             if ui.add(aac_btn).clicked() {
-                                self.metermode = MeterMode::AAC;
+                                self.metermode = MeterMode::Aac;
                                 self.curr_unit = "AAC".to_owned();
                                 self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "AAC");
@@ -673,52 +672,52 @@ impl eframe::App for MyApp {
                         });
                         ui.horizontal(|ui| {
                             let res_btn = egui::Button::new("Ohm")
-                                .selected(self.metermode == MeterMode::RES)
+                                .selected(self.metermode == MeterMode::Res)
                                 .min_size(btn_size);
                             if ui.add(res_btn).clicked() {
-                                self.metermode = MeterMode::RES;
+                                self.metermode = MeterMode::Res;
                                 self.curr_unit = "Ohm".to_owned();
                                 self.confstring = "CONF:RES AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "RES");
                                 self.curr_range = 0;
                             }
                             let cap_btn = egui::Button::new("C")
-                                .selected(self.metermode == MeterMode::CAP)
+                                .selected(self.metermode == MeterMode::Cap)
                                 .min_size(btn_size);
                             if ui.add(cap_btn).clicked() {
-                                self.metermode = MeterMode::CAP;
+                                self.metermode = MeterMode::Cap;
                                 self.curr_unit = "F".to_owned();
                                 self.confstring = "CONF:CAP AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "CAP");
                                 self.curr_range = 0;
                             }
                             let freq_btn = egui::Button::new("Freq")
-                                .selected(self.metermode == MeterMode::FREQ)
+                                .selected(self.metermode == MeterMode::Freq)
                                 .min_size(btn_size);
                             if ui.add(freq_btn).clicked() {
-                                self.metermode = MeterMode::FREQ;
+                                self.metermode = MeterMode::Freq;
                                 self.curr_unit = "Hz".to_owned();
                                 self.confstring = "CONF:FREQ\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "FREQ");
                                 self.curr_range = 0;
                             }
                             let per_btn = egui::Button::new("Period")
-                                .selected(self.metermode == MeterMode::PER)
+                                .selected(self.metermode == MeterMode::Per)
                                 .min_size(btn_size);
                             if ui.add(per_btn).clicked() {
-                                self.metermode = MeterMode::PER;
+                                self.metermode = MeterMode::Per;
                                 self.curr_unit = "s".to_owned();
                                 self.confstring = "CONF:PER\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "PER");
@@ -727,40 +726,40 @@ impl eframe::App for MyApp {
                         });
                         ui.horizontal(|ui| {
                             let diod_btn = egui::Button::new("Diode")
-                                .selected(self.metermode == MeterMode::DIOD)
+                                .selected(self.metermode == MeterMode::Diod)
                                 .min_size(btn_size);
                             if ui.add(diod_btn).clicked() {
-                                self.metermode = MeterMode::DIOD;
+                                self.metermode = MeterMode::Diod;
                                 self.curr_unit = "V".to_owned();
                                 self.confstring = "CONF:DIOD\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "DIOD");
                                 self.curr_range = 0;
                             }
                             let cont_btn = egui::Button::new("Cont")
-                                .selected(self.metermode == MeterMode::CONT)
+                                .selected(self.metermode == MeterMode::Cont)
                                 .min_size(btn_size);
                             if ui.add(cont_btn).clicked() {
-                                self.metermode = MeterMode::CONT;
+                                self.metermode = MeterMode::Cont;
                                 self.curr_unit = "Ohm".to_owned();
                                 self.confstring = "CONF:CONT\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "CONT");
                                 self.curr_range = 0;
                             }
                             let cont_btn = egui::Button::new("Temp")
-                                .selected(self.metermode == MeterMode::TEMP)
+                                .selected(self.metermode == MeterMode::Temp)
                                 .min_size(btn_size);
                             if ui.add(cont_btn).clicked() {
-                                self.metermode = MeterMode::TEMP;
+                                self.metermode = MeterMode::Temp;
                                 self.curr_unit = "°C".to_owned();
                                 // TODO temp mode needs more selections like sensor typ, unit etc.
                                 self.confstring = "CONF:TEMP:RTD PT100\n".to_owned();
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "TEMP");
@@ -794,7 +793,7 @@ impl eframe::App for MyApp {
                             self.confstring = self
                                 .ratecmd
                                 .gen_scpi(self.ratecmd.opts.index(self.curr_rate).unwrap().0);
-                            self.scpimode = ScpiMode::CONF;
+                            self.scpimode = ScpiMode::Conf;
                             self.issue_new_write = true;
                             if self.value_debug {
                                 println!("Selected Rate changed: {}", self.confstring);
@@ -810,7 +809,7 @@ impl eframe::App for MyApp {
                             if rangebox.changed() {
                                 self.confstring = rangecmd
                                     .gen_scpi(rangecmd.opts.index(self.curr_range).unwrap().0);
-                                self.scpimode = ScpiMode::CONF;
+                                self.scpimode = ScpiMode::Conf;
                                 self.issue_new_write = true;
                                 if self.value_debug {
                                     println!("Selected Range changed: {}", self.confstring);
