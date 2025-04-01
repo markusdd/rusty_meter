@@ -1,14 +1,14 @@
 [package]
 name = "rusty_meter"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Markus Krause <Krause.Markus@gmx.com>"]
 edition = "2021"
 rust-version = "1.82"
 
 
 [dependencies]
-egui = "0.30.0"
-eframe = { version = "0.30.0", default-features = false, features = [
+egui = "0.31.1"
+eframe = { version = "0.31.1", default-features = false, features = [
     "accesskit",     # Make egui comptaible with screen readers. NOTE: adds a lot of dependencies.
     "default_fonts", # Embed the default egui fonts.
     "glow",          # Use the glow rendering backend. Alternative: "wgpu".
@@ -16,33 +16,33 @@ eframe = { version = "0.30.0", default-features = false, features = [
     "x11",           # for Linux
     "wayland",       # for Linux  
 ] }
-egui-dropdown = "0.12.0"
-image = { version = "0.25.5", features = ["jpeg", "png"] }
-egui_extras = { version = "0.30.0", features = ["all_loaders"] }
-epaint = "0.30.0"
-egui_plot = "0.30.0"
-log = "0.4.22"
-reqwest = { version = "0.12.11", features = ["blocking"] }
+egui-dropdown = "0.13.0"
+image = { version = "0.25.6", features = ["jpeg", "png"] }
+egui_extras = { version = "0.31.1", features = ["all_loaders"] }
+epaint = "0.31.1"
+egui_plot = "0.31.0"
+log = "0.4.27"
+reqwest = { version = "0.12.15", features = ["blocking"] }
 urlencoding = "2.1.3"
 subprocess = "0.2.9"
-serde_json = "1.0.134"
+serde_json = "1.0.140"
 regex = "1.11.1"
-indexmap = "2.7.0"
+indexmap = "2.8.0"
 downloader = "0.2.8"
-tempfile = "3.14.0"
-phf = { version = "0.11.2", features = ["macros"] }
+tempfile = "3.19.1"
+phf = { version = "0.11.3", features = ["macros"] }
 glob = "0.3.2"
 arboard = "3.4.1"
-mio-serial = "5.0.5"
-mio = "0.8.11" # currently stuck at below 1.0 because of mio-serial not being updated yet
-tokio = { version = "1.42.0", features = ["full"] }
+mio-serial = "5.0.6"
+mio = "1.0.3"
+tokio = { version = "1.44.1", features = ["full"] }
 
 # You only need serde if you want app persistence:
-serde = { version = "1.0.217", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-env_logger = "0.11.6"
+env_logger = "0.11.8"
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]

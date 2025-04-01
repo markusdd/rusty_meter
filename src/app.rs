@@ -564,11 +564,11 @@ impl eframe::App for MyApp {
                 let meter_frame = egui::Frame {
                     inner_margin: 12.0.into(),
                     outer_margin: 24.0.into(),
-                    rounding: 5.0.into(),
+                    corner_radius: 5.0.into(),
                     shadow: epaint::Shadow {
-                        offset: [8.0, 12.0].into(),
-                        blur: 16.0,
-                        spread: 0.0,
+                        offset: [8, 12].into(),
+                        blur: 16,
+                        spread: 0,
                         color: egui::Color32::from_black_alpha(180),
                     },
                     fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
@@ -603,11 +603,11 @@ impl eframe::App for MyApp {
                 let control_frame = egui::Frame {
                     inner_margin: 12.0.into(),
                     outer_margin: 24.0.into(),
-                    rounding: 5.0.into(),
+                    corner_radius: 5.0.into(),
                     shadow: epaint::Shadow {
-                        offset: [8.0, 12.0].into(),
-                        blur: 16.0,
-                        spread: 0.0,
+                        offset: [8, 12].into(),
+                        blur: 16,
+                        spread: 0,
                         color: egui::Color32::from_black_alpha(180),
                     },
                     fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
@@ -771,11 +771,11 @@ impl eframe::App for MyApp {
                 let options_frame = egui::Frame {
                     inner_margin: 12.0.into(),
                     outer_margin: 24.0.into(),
-                    rounding: 5.0.into(),
+                    corner_radius: 5.0.into(),
                     shadow: epaint::Shadow {
-                        offset: [8.0, 12.0].into(),
-                        blur: 16.0,
-                        spread: 0.0,
+                        offset: [8, 12].into(),
+                        blur: 16,
+                        spread: 0,
                         color: egui::Color32::from_black_alpha(180),
                     },
                     fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
