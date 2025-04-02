@@ -15,6 +15,9 @@ use phf::{phf_ordered_map, OrderedMap};
 use std::io;
 use tempfile::{Builder, TempDir};
 
+mod helpers;
+use helpers::format_measurement;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SERIAL_TOKEN: Token = Token(0);
@@ -577,12 +580,18 @@ impl eframe::App for MyApp {
                 meter_frame.show(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.allocate_ui_with_layout(
-                        // TODO this is bad as we actually want the size based on the minimal the fonts need
                         Vec2 { x: 400.0, y: 300.0 },
                         egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
                         |ui| {
+                            let formatted_value = format_measurement(
+                                self.curr_meas,
+                                10,
+                                1_000_000.0,
+                                0.001,
+                                &self.metermode, // Pass the current meter mode
+                            );
                             ui.label(
-                                egui::RichText::new(format!("{:>10.4}", self.curr_meas))
+                                egui::RichText::new(formatted_value)
                                     .color(egui::Color32::YELLOW)
                                     .font(FontId {
                                         size: 60.0,
