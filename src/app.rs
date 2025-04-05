@@ -378,7 +378,7 @@ impl MyApp {
         app
     }
 
-    fn spawn_serial_task(&mut self) {
+    fn spawn_serial_task(&mut self, ctx: Context) {
         if self.serial.is_none() {
             return;
         }
@@ -398,7 +398,6 @@ impl MyApp {
             let mut readbuf = [0u8; 1024];
             let mut scpimode = ScpiMode::Idn;
             let mut command_queue: VecDeque<String> = VecDeque::new();
-            let mut awaiting_response = false;
 
             poll.registry()
                 .register(
@@ -407,133 +406,170 @@ impl MyApp {
                     Interest::READABLE | Interest::WRITABLE,
                 )
                 .unwrap();
+            if *value_debug_shared.lock().unwrap() {
+                println!("Serial port registered for READABLE and WRITABLE events");
+            }
 
             // Initial command to identify device
             command_queue.push_back("*IDN?\n".to_string());
 
             loop {
-                // Fetch the latest shared values at the start of each loop iteration
                 let debug = *value_debug_shared.lock().unwrap();
                 let interval = *poll_interval_shared.lock().unwrap();
 
-                // Queue new commands from UI if not awaiting a response
-                if !awaiting_response {
-                    while let Ok(cmd) = rx_cmd.try_recv() {
-                        if debug {
-                            println!("Queuing command: {:?}", cmd);
-                        }
-                        command_queue.push_back(cmd);
+                if debug {
+                    println!("Starting poll loop, queue: {:?}", command_queue);
+                }
+
+                // Queue new commands from UI, inserting at front for priority
+                while let Ok(cmd) = rx_cmd.try_recv() {
+                    if debug {
+                        println!("Queuing command from UI: {:?}", cmd);
+                    }
+                    if !cmd.ends_with("?\n") {
+                        command_queue.push_front(cmd); // Prioritize non-query commands
+                    } else {
+                        command_queue.push_back(cmd); // MEAS? goes to the back
                     }
                 }
 
-                // Poll for events with the current interval
-                if poll
-                    .poll(&mut events, Some(Duration::from_millis(interval)))
-                    .is_ok()
-                {
-                    // Handle reads
-                    for event in events.iter() {
-                        if event.token() == SERIAL_TOKEN && event.is_readable() {
-                            loop {
-                                match serial.read(&mut readbuf) {
-                                    Ok(count) => {
-                                        let content = String::from_utf8_lossy(&readbuf[..count]);
-                                        if debug {
-                                            println!("Received: {:?}", content);
-                                        }
-                                        if content.ends_with("\r\n") {
-                                            match scpimode {
-                                                ScpiMode::Idn => {
-                                                    let _ = tx_data
-                                                        .send((
-                                                            Some(content.trim_end().to_owned()),
-                                                            None,
-                                                        ))
-                                                        .await;
-                                                    command_queue
-                                                        .push_back("SYST:REM\n".to_string());
-                                                    scpimode = ScpiMode::Meas;
-                                                    command_queue.push_back("MEAS?\n".to_string());
+                // Poll for events
+                match poll.poll(&mut events, Some(Duration::from_millis(interval))) {
+                    Ok(()) => {
+                        if debug {
+                            println!(
+                                "Poll returned events: {:?}",
+                                events.iter().collect::<Vec<_>>()
+                            );
+                        }
+
+                        for event in events.iter() {
+                            // Handle writes first to ensure queue is processed
+                            if event.is_writable() && !command_queue.is_empty() {
+                                if debug {
+                                    println!("Writable event detected, queue: {:?}", command_queue);
+                                }
+                                if let Some(cmd) = command_queue.front() {
+                                    if debug {
+                                        println!("Sending: {:?}", cmd);
+                                    }
+                                    match serial.write_all(cmd.as_bytes()) {
+                                        Ok(()) => {
+                                            let cmd = command_queue.pop_front().unwrap();
+                                            if debug {
+                                                println!("Command sent: {:?}", cmd);
+                                            }
+                                            // After *IDN? response, queue next commands
+                                            if cmd == "*IDN?\n" {
+                                                command_queue.push_front("SYST:REM\n".to_string());
+                                                scpimode = ScpiMode::Meas;
+                                                command_queue.push_front("MEAS?\n".to_string());
+                                                if debug {
+                                                    println!(
+                                                        "Queued SYST:REM and MEAS? after *IDN?, queue: {:?}",
+                                                        command_queue
+                                                    );
                                                 }
-                                                ScpiMode::Meas => {
-                                                    if let Ok(meas) =
-                                                        content.trim_end().parse::<f64>()
-                                                    {
-                                                        let _ =
-                                                            tx_data.send((None, Some(meas))).await;
+                                            }
+                                        }
+                                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                            if debug {
+                                                println!(
+                                                    "Serial write would block for {:?}, waiting",
+                                                    cmd
+                                                );
+                                            }
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            if debug {
+                                                println!("Failed to send command {:?}: {}", cmd, e);
+                                            }
+                                            command_queue.pop_front();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Handle reads
+                            if event.is_readable() {
+                                if debug {
+                                    println!("Readable event detected");
+                                }
+                                loop {
+                                    match serial.read(&mut readbuf) {
+                                        Ok(count) => {
+                                            let content =
+                                                String::from_utf8_lossy(&readbuf[..count]);
+                                            if debug {
+                                                println!("Received: {:?}", content);
+                                            }
+                                            if content.ends_with("\r\n") {
+                                                match scpimode {
+                                                    ScpiMode::Idn => {
+                                                        let _ = tx_data
+                                                            .send((
+                                                                Some(content.trim_end().to_owned()),
+                                                                None,
+                                                            ))
+                                                            .await;
+                                                    }
+                                                    ScpiMode::Meas => {
+                                                        if let Ok(meas) =
+                                                            content.trim_end().parse::<f64>()
+                                                        {
+                                                            let _ = tx_data
+                                                                .send((None, Some(meas)))
+                                                                .await;
+                                                            if debug {
+                                                                println!(
+                                                                    "Sent measurement: {}",
+                                                                    meas
+                                                                );
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
-                                            awaiting_response = false;
+                                        }
+                                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                                             if debug {
-                                                println!(
-                                                    "Response processed, scpimode: {:?}",
-                                                    scpimode
-                                                );
+                                                println!("Read would block, exiting read loop");
                                             }
+                                            break;
                                         }
-                                    }
-                                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                                    Err(e) => {
-                                        if debug {
-                                            println!("Serial read error: {}", e);
+                                        Err(e) => {
+                                            if debug {
+                                                println!("Serial read error: {}", e);
+                                            }
+                                            break;
                                         }
-                                        awaiting_response = false;
-                                        break;
                                     }
                                 }
                             }
                         }
                     }
-
-                    // Handle writes
-                    if !command_queue.is_empty() && !awaiting_response {
-                        if let Some(cmd) = command_queue.front() {
-                            if debug {
-                                println!("Sending: {:?}", cmd);
-                            }
-                            match serial.write_all(cmd.as_bytes()) {
-                                Ok(()) => {
-                                    let cmd = command_queue.pop_front().unwrap();
-                                    scpimode = ScpiMode::Meas;
-                                    command_queue.push_back("MEAS?\n".to_string());
-                                    awaiting_response = cmd.ends_with("?\n");
-                                    if debug {
-                                        println!("Command sent: {:?}", cmd);
-                                    }
-                                }
-                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                    if debug {
-                                        println!("Serial write would block for {:?}, waiting", cmd);
-                                    }
-                                }
-                                Err(e) => {
-                                    if debug {
-                                        println!("Failed to send command {:?}: {}", cmd, e);
-                                    }
-                                    command_queue.pop_front();
-                                    awaiting_response = false;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Controlled polling in Meas mode, allow up to 2 MEAS? commands
-                if !awaiting_response && scpimode == ScpiMode::Meas {
-                    let meas_count = command_queue.iter().filter(|cmd| *cmd == "MEAS?\n").count();
-                    if meas_count < 2 {
-                        command_queue.push_back("MEAS?\n".to_string());
+                    Err(e) => {
                         if debug {
-                            println!("Queued MEAS? for polling");
+                            println!("Poll error: {}", e);
                         }
                     }
                 }
 
-                // Use the current interval for the sleep duration
+                // Only queue MEAS? if the queue is empty (no pending commands)
+                if scpimode == ScpiMode::Meas && command_queue.is_empty() {
+                    command_queue.push_back("MEAS?\n".to_string());
+                    if debug {
+                        println!("Queued MEAS? for polling, queue: {:?}", command_queue);
+                    }
+                }
+
                 tokio::time::sleep(Duration::from_millis(interval)).await;
             }
         });
+
+        ctx.request_repaint(); // Ensure UI updates when task starts
     }
 
     fn spawn_graph_update_task(&mut self, ctx: Context) {
@@ -718,7 +754,7 @@ impl eframe::App for MyApp {
                                 .as_mut()
                                 .unwrap()
                                 .set_parity(mio_serial::Parity::None);
-                            self.spawn_serial_task();
+                            self.spawn_serial_task(ctx.clone());
                             self.spawn_graph_update_task(ctx.clone()); // Start graph update task
                         }
                     }
