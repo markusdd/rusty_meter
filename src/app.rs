@@ -1,8 +1,8 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     io::{Read, Write},
-    sync::Arc,
-    time::Duration,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use egui::{
@@ -43,7 +43,7 @@ enum ScpiMode {
     Meas,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 enum MeterMode {
     Vdc,
     Vac,
@@ -226,8 +226,9 @@ pub struct MyApp {
     connect_on_startup: bool,
     value_debug: bool,
     poll_interval_ms: u64,
-    beeper_enabled: bool, // Persistent beeper state
+    beeper_enabled: bool, // New field for beeper state, persistent
     cont_threshold: u32,  // Persistent continuity threshold (0-1000 ohms)
+    diod_threshold: f32,  // Persistent diode threshold (0-3.0 volts)
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -276,6 +277,12 @@ pub struct MyApp {
     serial_rx: Option<Receiver<(Option<String>, Option<f64>)>>, // Updated to handle device ID and measurements
     #[serde(skip)]
     serial_tx: Option<Sender<String>>, // New channel for sending commands to serial task
+    #[serde(skip)]
+    last_threshold_change: Option<Instant>, // For debouncing threshold updates
+    #[serde(skip)]
+    value_debug_shared: Arc<Mutex<bool>>, // Shared debug flag for live updates
+    #[serde(skip)]
+    poll_interval_shared: Arc<Mutex<u64>>, // Shared poll interval for live updates
 }
 
 impl Default for MyApp {
@@ -313,10 +320,14 @@ impl Default for MyApp {
             rangecmd: Some(RangeCmd::default()),
             curr_range: 0,
             serial_rx: None,
-            serial_tx: None, // Initialize as None
+            serial_tx: None,
             poll_interval_ms: 20,
             beeper_enabled: true, // Default to on, per meter spec
-            cont_threshold: 50,   // Default threshold: 50 ohms (reasonable starting point)
+            cont_threshold: 50,   // Default continuity threshold: 50 ohms
+            diod_threshold: 2.0,  // Default diode threshold: 2.0 volts (mid-range)
+            last_threshold_change: None,
+            value_debug_shared: Arc::new(Mutex::new(false)),
+            poll_interval_shared: Arc::new(Mutex::new(20)),
         }
     }
 }
@@ -326,7 +337,6 @@ impl MyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // This is also where you can customize the look and feel of egui using
         // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
-
         let mut fonts = FontDefinitions::default();
 
         fonts.font_data.insert(
@@ -348,10 +358,16 @@ impl MyApp {
         // Load previous app state (if any).
         // Note that you must enable the `persistence` feature for this to work.
         if let Some(storage) = cc.storage {
-            return eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
+            let mut app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
+            *app.value_debug_shared.lock().unwrap() = app.value_debug;
+            *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
+            return app;
         }
 
-        Default::default()
+        let mut app = Self::default();
+        *app.value_debug_shared.lock().unwrap() = app.value_debug;
+        *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
+        app
     }
 
     fn spawn_serial_task(&mut self, ctx: Context) {
@@ -362,14 +378,12 @@ impl MyApp {
         let (tx_data, rx_data) = mpsc::channel::<(Option<String>, Option<f64>)>(100); // Channel for data (device ID, measurements)
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // New channel for commands
         self.serial_rx = Some(rx_data);
-        self.serial_tx = Some(tx_cmd.clone()); // Store the sender for UI use
+        self.serial_tx = Some(tx_cmd.clone());
 
         let mut serial = self.serial.take().unwrap();
-        let interval_ms = self.poll_interval_ms;
-        let value_debug = self.value_debug;
-
-        // Clone the context for waking the UI
         let ctx_clone = ctx.clone();
+        let value_debug_shared = self.value_debug_shared.clone();
+        let poll_interval_shared = self.poll_interval_shared.clone();
 
         tokio::spawn(async move {
             let mut poll = Poll::new().unwrap();
@@ -389,7 +403,8 @@ impl MyApp {
             loop {
                 // Check for UI commands first
                 if let Ok(cmd) = rx_cmd.try_recv() {
-                    if value_debug {
+                    let debug = *value_debug_shared.lock().unwrap();
+                    if debug {
                         println!("Sending: {:?}", cmd);
                     }
                     match serial.write_all(cmd.as_bytes()) {
@@ -399,11 +414,9 @@ impl MyApp {
                                 scpimode = ScpiMode::Meas;
                                 issue_new_write = true; // Trigger MEAS? next
                             }
-                            // Delay to ensure meter processes the command
-                            tokio::time::sleep(Duration::from_millis(500)).await;
                         }
                         Err(e) => {
-                            if value_debug {
+                            if debug {
                                 println!("Failed to send command {:?}: {}", cmd, e);
                             }
                         }
@@ -418,7 +431,8 @@ impl MyApp {
                         ScpiMode::Syst => "SYST:REM\n",
                         ScpiMode::Meas => "MEAS?\n",
                     };
-                    if value_debug {
+                    let debug = *value_debug_shared.lock().unwrap();
+                    if debug {
                         println!("Sending: {:?}", sendstring);
                     }
                     if let Ok(()) = serial.write_all(sendstring.as_bytes()) {
@@ -432,14 +446,16 @@ impl MyApp {
                     }
                 }
 
-                if let Ok(()) = poll.poll(&mut events, Some(Duration::from_millis(interval_ms))) {
+                let interval = *poll_interval_shared.lock().unwrap();
+                if let Ok(()) = poll.poll(&mut events, Some(Duration::from_millis(interval))) {
                     for event in events.iter() {
                         if event.token() == SERIAL_TOKEN {
                             loop {
                                 match serial.read(&mut readbuf) {
                                     Ok(count) => {
                                         let content = String::from_utf8_lossy(&readbuf[..count]);
-                                        if value_debug {
+                                        let debug = *value_debug_shared.lock().unwrap();
+                                        if debug {
                                             println!("Received: {:?}", content);
                                         }
                                         if content.ends_with("\r\n") {
@@ -460,7 +476,6 @@ impl MyApp {
                                                     {
                                                         let _ =
                                                             tx_data.send((None, Some(meas))).await;
-                                                        // Wake the UI when data is sent
                                                         ctx_clone.request_repaint();
                                                     }
                                                 }
@@ -478,7 +493,7 @@ impl MyApp {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+                tokio::time::sleep(Duration::from_millis(interval)).await;
             }
         });
 
@@ -499,27 +514,32 @@ impl MyApp {
         if let Some(tx) = self.serial_tx.clone() {
             let mode_cmd = self.confstring.clone();
             let value_debug = self.value_debug;
-            let threshold = self.cont_threshold;
+            let cont_threshold = self.cont_threshold;
+            let diod_threshold = self.diod_threshold;
             if let Some(beep) = beeper_enabled {
                 let beeper_cmd = if beep {
                     "SYST:BEEP:STATe ON\n".to_string()
                 } else {
                     "SYST:BEEP:STATe OFF\n".to_string()
                 };
-                let threshold_cmd = format!("CONT:THREshold {}\n", threshold);
+                let threshold_cmd = if mode == MeterMode::Cont {
+                    format!("CONT:THREshold {}\n", cont_threshold)
+                } else {
+                    format!("DIOD:THREshold {}\n", diod_threshold)
+                };
                 tokio::spawn(async move {
                     if let Err(e) = tx.send(mode_cmd).await {
                         if value_debug {
                             println!("Failed to queue mode command: {}", e);
                         }
                     }
-                    tokio::time::sleep(Duration::from_millis(500)).await; // Ensure mode settles
+                    tokio::time::sleep(Duration::from_millis(100)).await; // Give meter time to settle
                     if let Err(e) = tx.send(beeper_cmd).await {
                         if value_debug {
                             println!("Failed to queue beeper command: {}", e);
                         }
                     }
-                    tokio::time::sleep(Duration::from_millis(500)).await; // Ensure beeper settles
+                    tokio::time::sleep(Duration::from_millis(100)).await; // Ensure sequential processing
                     if let Err(e) = tx.send(threshold_cmd).await {
                         if value_debug {
                             println!("Failed to queue threshold command: {}", e);
@@ -581,7 +601,6 @@ impl eframe::App for MyApp {
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
-
             egui::menu::bar(ui, |ui| {
                 // NOTE: no File->Quit on web pages!
                 ui.menu_button("File", |ui| {
@@ -593,7 +612,6 @@ impl eframe::App for MyApp {
                     }
                 });
                 ui.add_space(16.0);
-
                 egui::widgets::global_theme_preference_buttons(ui);
             });
         });
@@ -907,7 +925,7 @@ impl eframe::App for MyApp {
                                 }
                             }
                         }
-                        // Add beeper controls for CONT and DIOD modes
+                        // Add beeper and threshold controls for CONT and DIOD modes
                         if self.metermode == MeterMode::Cont || self.metermode == MeterMode::Diod {
                             let mut beeper = self.beeper_enabled;
                             if ui.checkbox(&mut beeper, "Beeper").changed() {
@@ -929,27 +947,75 @@ impl eframe::App for MyApp {
                                 }
                             }
 
-                            // Continuity threshold slider
-                            let threshold_slider = ui.add(
-                                egui::Slider::new(&mut self.cont_threshold, 0..=1000)
-                                    .text("Threshold (Ω)")
-                                    .step_by(1.0)
-                                    .clamping(SliderClamping::Always),
-                            );
-                            if threshold_slider.changed() {
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = format!("CONT:THREshold {}\n", self.cont_threshold);
-                                    let value_debug = self.value_debug;
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            if value_debug {
-                                                println!(
-                                                    "Failed to queue threshold command: {}",
-                                                    e
-                                                );
+                            let now = Instant::now();
+                            let should_debounce =
+                                self.last_threshold_change.map_or(false, |last| {
+                                    now.duration_since(last) < Duration::from_millis(500)
+                                });
+
+                            if self.metermode == MeterMode::Cont {
+                                let threshold_slider = ui.add(
+                                    egui::Slider::new(&mut self.cont_threshold, 0..=1000)
+                                        .text("Threshold (Ω)")
+                                        .step_by(1.0)
+                                        .clamping(SliderClamping::Always),
+                                );
+                                if threshold_slider.changed() {
+                                    self.last_threshold_change = Some(now);
+                                }
+                                if (threshold_slider.drag_stopped() || !should_debounce)
+                                    && self.last_threshold_change.is_some()
+                                {
+                                    if let Some(tx) = self.serial_tx.clone() {
+                                        let cmd =
+                                            format!("CONT:THREshold {}\n", self.cont_threshold);
+                                        let value_debug = self.value_debug;
+                                        tokio::spawn(async move {
+                                            if let Err(e) = tx.send(cmd).await {
+                                                if value_debug {
+                                                    println!(
+                                                        "Failed to queue threshold command: {}",
+                                                        e
+                                                    );
+                                                }
                                             }
-                                        }
-                                    });
+                                        });
+                                    }
+                                    if threshold_slider.drag_stopped() {
+                                        self.last_threshold_change = None; // Reset after sending final value
+                                    }
+                                }
+                            } else if self.metermode == MeterMode::Diod {
+                                let threshold_slider = ui.add(
+                                    egui::Slider::new(&mut self.diod_threshold, 0.0..=3.0)
+                                        .text("Threshold (V)")
+                                        .step_by(0.1)
+                                        .clamping(SliderClamping::Always),
+                                );
+                                if threshold_slider.changed() {
+                                    self.last_threshold_change = Some(now);
+                                }
+                                if (threshold_slider.drag_stopped() || !should_debounce)
+                                    && self.last_threshold_change.is_some()
+                                {
+                                    if let Some(tx) = self.serial_tx.clone() {
+                                        let cmd =
+                                            format!("DIOD:THREshold {}\n", self.diod_threshold);
+                                        let value_debug = self.value_debug;
+                                        tokio::spawn(async move {
+                                            if let Err(e) = tx.send(cmd).await {
+                                                if value_debug {
+                                                    println!(
+                                                        "Failed to queue threshold command: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    }
+                                    if threshold_slider.drag_stopped() {
+                                        self.last_threshold_change = None; // Reset after sending final value
+                                    }
                                 }
                             }
                         }
@@ -1010,7 +1076,14 @@ impl eframe::App for MyApp {
                                 &mut self.parity,
                                 "Use parity bit (ignored right now, always None)",
                             );
-                            ui.checkbox(&mut self.value_debug, "Value debug (print to CLI)");
+                            let mut value_debug = *self.value_debug_shared.lock().unwrap();
+                            if ui
+                                .checkbox(&mut value_debug, "Value debug (print to CLI)")
+                                .changed()
+                            {
+                                self.value_debug = value_debug;
+                                *self.value_debug_shared.lock().unwrap() = value_debug;
+                            }
                             ui.label("Baud rate:");
                             ui.add(
                                 TextEdit::singleline(&mut self.baud_rate.to_string())
@@ -1039,6 +1112,7 @@ impl eframe::App for MyApp {
                                 if let Ok(new_interval) = interval_str.parse::<u64>() {
                                     if new_interval > 0 {
                                         self.poll_interval_ms = new_interval;
+                                        *self.poll_interval_shared.lock().unwrap() = new_interval;
                                     }
                                 }
                             }
