@@ -399,14 +399,6 @@ impl MyApp {
                             }
                             // Delay to ensure meter processes the command
                             tokio::time::sleep(Duration::from_millis(500)).await;
-                            // Query beeper state if it's a BEEP command
-                            if cmd.starts_with("SYST:BEEP:STATe") {
-                                if let Ok(()) = serial.write_all("SYST:BEEP:STATe?\n".as_bytes()) {
-                                    if value_debug {
-                                        println!("Sending: \"SYST:BEEP:STATe?\\n\"");
-                                    }
-                                }
-                            }
                         }
                         Err(e) => {
                             if value_debug {
@@ -489,6 +481,54 @@ impl MyApp {
         });
 
         ctx.request_repaint();
+    }
+
+    fn set_mode(
+        &mut self,
+        mode: MeterMode,
+        unit: &str,
+        cmd: &str,
+        range_type: Option<&str>,
+        beeper_enabled: Option<bool>,
+    ) {
+        self.metermode = mode;
+        self.curr_unit = unit.to_owned();
+        self.confstring = cmd.to_owned();
+        if let Some(tx) = self.serial_tx.clone() {
+            let mode_cmd = self.confstring.clone();
+            let value_debug = self.value_debug;
+            if let Some(beep) = beeper_enabled {
+                let beeper_cmd = if beep {
+                    "SYST:BEEP:STATe ON\n".to_string()
+                } else {
+                    "SYST:BEEP:STATe OFF\n".to_string()
+                };
+                tokio::spawn(async move {
+                    if let Err(e) = tx.send(mode_cmd).await {
+                        if value_debug {
+                            println!("Failed to queue mode command: {}", e);
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await; // Ensure mode settles
+                    if let Err(e) = tx.send(beeper_cmd).await {
+                        if value_debug {
+                            println!("Failed to queue beeper command: {}", e);
+                        }
+                    }
+                });
+            } else {
+                tokio::spawn(async move {
+                    if let Err(e) = tx.send(mode_cmd).await {
+                        if value_debug {
+                            println!("Failed to queue command: {}", e);
+                        }
+                    }
+                });
+            }
+        }
+        self.values = VecDeque::with_capacity(self.mem_depth);
+        self.rangecmd = range_type.and_then(|rt| RangeCmd::new(&self.curr_meter, rt));
+        self.curr_range = 0;
     }
 }
 
@@ -668,77 +708,49 @@ impl eframe::App for MyApp {
                                 .selected(self.metermode == MeterMode::Vdc)
                                 .min_size(btn_size);
                             if ui.add(vdc_btn).clicked() {
-                                self.metermode = MeterMode::Vdc;
-                                self.curr_unit = "VDC".to_owned();
-                                self.confstring = "CONF:VOLT:DC AUTO\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "VDC");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Vdc,
+                                    "VDC",
+                                    "CONF:VOLT:DC AUTO\n",
+                                    Some("VDC"),
+                                    None,
+                                );
                             }
                             let vac_btn = egui::Button::new("VAC")
                                 .selected(self.metermode == MeterMode::Vac)
                                 .min_size(btn_size);
                             if ui.add(vac_btn).clicked() {
-                                self.metermode = MeterMode::Vac;
-                                self.curr_unit = "VAC".to_owned();
-                                self.confstring = "CONF:VOLT:AC AUTO\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "VAC");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Vac,
+                                    "VAC",
+                                    "CONF:VOLT:AC AUTO\n",
+                                    Some("VAC"),
+                                    None,
+                                );
                             }
                             let adc_btn = egui::Button::new("ADC")
                                 .selected(self.metermode == MeterMode::Adc)
                                 .min_size(btn_size);
                             if ui.add(adc_btn).clicked() {
-                                self.metermode = MeterMode::Adc;
-                                self.curr_unit = "ADC".to_owned();
-                                self.confstring = "CONF:CURR:DC AUTO\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "ADC");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Adc,
+                                    "ADC",
+                                    "CONF:CURR:DC AUTO\n",
+                                    Some("ADC"),
+                                    None,
+                                );
                             }
                             let aac_btn = egui::Button::new("AAC")
                                 .selected(self.metermode == MeterMode::Aac)
                                 .min_size(btn_size);
                             if ui.add(aac_btn).clicked() {
-                                self.metermode = MeterMode::Aac;
-                                self.curr_unit = "AAC".to_owned();
-                                self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "AAC");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Aac,
+                                    "AAC",
+                                    "CONF:CURR:AC AUTO\n",
+                                    Some("AAC"),
+                                    None,
+                                );
                             }
                         });
                         ui.horizontal(|ui| {
@@ -746,77 +758,43 @@ impl eframe::App for MyApp {
                                 .selected(self.metermode == MeterMode::Res)
                                 .min_size(btn_size);
                             if ui.add(res_btn).clicked() {
-                                self.metermode = MeterMode::Res;
-                                self.curr_unit = "Ohm".to_owned();
-                                self.confstring = "CONF:RES AUTO\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "RES");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Res,
+                                    "Ohm",
+                                    "CONF:RES AUTO\n",
+                                    Some("RES"),
+                                    None,
+                                );
                             }
                             let cap_btn = egui::Button::new("C")
                                 .selected(self.metermode == MeterMode::Cap)
                                 .min_size(btn_size);
                             if ui.add(cap_btn).clicked() {
-                                self.metermode = MeterMode::Cap;
-                                self.curr_unit = "F".to_owned();
-                                self.confstring = "CONF:CAP AUTO\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "CAP");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Cap,
+                                    "F",
+                                    "CONF:CAP AUTO\n",
+                                    Some("CAP"),
+                                    None,
+                                );
                             }
                             let freq_btn = egui::Button::new("Freq")
                                 .selected(self.metermode == MeterMode::Freq)
                                 .min_size(btn_size);
                             if ui.add(freq_btn).clicked() {
-                                self.metermode = MeterMode::Freq;
-                                self.curr_unit = "Hz".to_owned();
-                                self.confstring = "CONF:FREQ\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "FREQ");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Freq,
+                                    "Hz",
+                                    "CONF:FREQ\n",
+                                    Some("FREQ"),
+                                    None,
+                                );
                             }
                             let per_btn = egui::Button::new("Period")
                                 .selected(self.metermode == MeterMode::Per)
                                 .min_size(btn_size);
                             if ui.add(per_btn).clicked() {
-                                self.metermode = MeterMode::Per;
-                                self.curr_unit = "s".to_owned();
-                                self.confstring = "CONF:PER\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "PER");
-                                self.curr_range = 0;
+                                self.set_mode(MeterMode::Per, "s", "CONF:PER\n", Some("PER"), None);
                             }
                         });
                         ui.horizontal(|ui| {
@@ -824,86 +802,37 @@ impl eframe::App for MyApp {
                                 .selected(self.metermode == MeterMode::Diod)
                                 .min_size(btn_size);
                             if ui.add(diod_btn).clicked() {
-                                self.metermode = MeterMode::Diod;
-                                self.curr_unit = "V".to_owned();
-                                self.confstring = "CONF:DIOD\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let mode_cmd = self.confstring.clone();
-                                    let beeper_cmd = if self.beeper_enabled {
-                                        "SYST:BEEP:STATe ON\n".to_string()
-                                    } else {
-                                        "SYST:BEEP:STATe OFF\n".to_string()
-                                    };
-                                    let value_debug = self.value_debug;
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(mode_cmd).await {
-                                            if value_debug {
-                                                println!("Failed to queue mode command: {}", e);
-                                            }
-                                        }
-                                        tokio::time::sleep(Duration::from_millis(500)).await; // Ensure mode settles
-                                        if let Err(e) = tx.send(beeper_cmd).await {
-                                            if value_debug {
-                                                println!("Failed to queue beeper command: {}", e);
-                                            }
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "DIOD");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Diod,
+                                    "V",
+                                    "CONF:DIOD\n",
+                                    Some("DIOD"),
+                                    Some(self.beeper_enabled),
+                                );
                             }
                             let cont_btn = egui::Button::new("Cont")
                                 .selected(self.metermode == MeterMode::Cont)
                                 .min_size(btn_size);
                             if ui.add(cont_btn).clicked() {
-                                self.metermode = MeterMode::Cont;
-                                self.curr_unit = "Ohm".to_owned();
-                                self.confstring = "CONF:CONT\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let mode_cmd = self.confstring.clone();
-                                    let beeper_cmd = if self.beeper_enabled {
-                                        "SYST:BEEP:STATe ON\n".to_string()
-                                    } else {
-                                        "SYST:BEEP:STATe OFF\n".to_string()
-                                    };
-                                    let value_debug = self.value_debug;
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(mode_cmd).await {
-                                            if value_debug {
-                                                println!("Failed to queue mode command: {}", e);
-                                            }
-                                        }
-                                        tokio::time::sleep(Duration::from_millis(500)).await; // Ensure mode settles
-                                        if let Err(e) = tx.send(beeper_cmd).await {
-                                            if value_debug {
-                                                println!("Failed to queue beeper command: {}", e);
-                                            }
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "CONT");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Cont,
+                                    "Ohm",
+                                    "CONF:CONT\n",
+                                    Some("CONT"),
+                                    Some(self.beeper_enabled),
+                                );
                             }
                             let temp_btn = egui::Button::new("Temp")
                                 .selected(self.metermode == MeterMode::Temp)
                                 .min_size(btn_size);
                             if ui.add(temp_btn).clicked() {
-                                self.metermode = MeterMode::Temp;
-                                self.curr_unit = "°C".to_owned();
-                                self.confstring = "CONF:TEMP:RTD PT100\n".to_owned();
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
-                                self.values = VecDeque::with_capacity(self.mem_depth);
-                                self.rangecmd = RangeCmd::new(&self.curr_meter, "TEMP");
-                                self.curr_range = 0;
+                                self.set_mode(
+                                    MeterMode::Temp,
+                                    "°C",
+                                    "CONF:TEMP:RTD PT100\n",
+                                    Some("TEMP"),
+                                    None,
+                                );
                             }
                         });
                     });

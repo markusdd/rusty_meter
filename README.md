@@ -19,7 +19,6 @@ Maybe some stuff even works out of the box.
 
 - math modes
 - continuity threshold
-- beeper control
 - code refactoring for easier integration of other meters
 - make serial parameters changeable
 - csv record export
