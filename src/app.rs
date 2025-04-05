@@ -41,7 +41,6 @@ pub trait GenScpi {
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum ScpiMode {
     Idn,
-    Syst,
     Meas,
 }
 
@@ -380,7 +379,6 @@ impl MyApp {
         self.serial_tx = Some(tx_cmd.clone());
 
         let mut serial = self.serial.take().unwrap();
-        let ctx_clone = ctx.clone();
         let value_debug_shared = self.value_debug_shared.clone();
         let poll_interval_shared = self.poll_interval_shared.clone();
 
@@ -441,13 +439,11 @@ impl MyApp {
                                                             None,
                                                         ))
                                                         .await;
-                                                    scpimode = ScpiMode::Syst;
                                                     command_queue
                                                         .push_back("SYST:REM\n".to_string());
                                                     scpimode = ScpiMode::Meas;
                                                     command_queue.push_back("MEAS?\n".to_string());
                                                 }
-                                                ScpiMode::Syst => {}
                                                 ScpiMode::Meas => {
                                                     if let Ok(meas) =
                                                         content.trim_end().parse::<f64>()
@@ -488,13 +484,8 @@ impl MyApp {
                             match serial.write_all(cmd.as_bytes()) {
                                 Ok(()) => {
                                     let cmd = command_queue.pop_front().unwrap();
-                                    if cmd.starts_with("CONF:") {
-                                        scpimode = ScpiMode::Meas;
-                                        command_queue.push_back("MEAS?\n".to_string());
-                                    } else if cmd == "SYST:REM\n" {
-                                        scpimode = ScpiMode::Meas;
-                                        command_queue.push_back("MEAS?\n".to_string());
-                                    }
+                                    scpimode = ScpiMode::Meas;
+                                    command_queue.push_back("MEAS?\n".to_string());
                                     awaiting_response = cmd.ends_with("?\n");
                                     if debug {
                                         println!("Command sent: {:?}", cmd);

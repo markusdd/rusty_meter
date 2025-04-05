@@ -29,7 +29,7 @@ The Releases section has automatically built releases for Mac ARM64 and x86_64, 
 
 ## What this is NOT
 
-Technically, a multimeter is not an oscilloscope. So even though you get a nice time-graph of your measurements, 
+Technically, a multimeter is not an oscilloscope. So even though you get a nice time-graph of your measurements,
 keep in mind the meter measures values much more accurately, but also wayyyyyyy slower compared to an oscilloscope, so the
 bandwidth is very, VERY small.
 So if you need to pick up any type of logic or analog signals that are not at least semi-static: Use a logic analyzer or proper scope.
