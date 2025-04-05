@@ -14,6 +14,8 @@ use mio_serial::{SerialPortBuilderExt, SerialStream};
 use phf::{phf_ordered_map, OrderedMap};
 use std::io;
 use tempfile::{Builder, TempDir};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 
 mod helpers;
 use helpers::format_measurement;
@@ -264,6 +266,9 @@ pub struct MyApp {
     rangecmd: Option<RangeCmd>,
     #[serde(skip)]
     curr_range: usize,
+    #[serde(skip)]
+    serial_rx: Option<Receiver<f64>>,
+    poll_interval_ms: u64,
 }
 
 impl Default for MyApp {
@@ -287,7 +292,7 @@ impl Default for MyApp {
             readbuf: [0u8; 1024],
             portlist: VecDeque::with_capacity(11),
             values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
-            poll: Poll::new().unwrap(), // if this does not work there's no point in running anyway
+            poll: Poll::new().unwrap(),
             events: Events::with_capacity(1),
             serial: None,
             device: "".to_owned(),
@@ -299,6 +304,8 @@ impl Default for MyApp {
             curr_rate: 0,
             rangecmd: Some(RangeCmd::default()),
             curr_range: 0,
+            serial_rx: None,
+            poll_interval_ms: 20,
         }
     }
 }
@@ -336,149 +343,143 @@ impl MyApp {
         Default::default()
     }
 
-    fn dispatch_serial_comms(ctx: Context) {
-        // println!("Hi in dispatch fn! Serial port!");
+    fn spawn_serial_task(&mut self, ctx: Context) {
+        if self.serial.is_none() {
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<f64>(100);
+        self.serial_rx = Some(rx);
+
+        let mut serial = self.serial.take().unwrap();
+        let interval_ms = self.poll_interval_ms;
+        let value_debug = self.value_debug;
+
+        // Clone the context for waking the UI
+        let ctx_clone = ctx.clone();
+
         tokio::spawn(async move {
+            let mut poll = Poll::new().unwrap();
+            let mut events = Events::with_capacity(1);
+            let mut readbuf = [0u8; 1024];
+            let mut scpimode = ScpiMode::Idn;
+            let mut device = String::new();
+            let mut issue_new_write = true;
+
+            poll.registry()
+                .register(
+                    &mut serial,
+                    SERIAL_TOKEN,
+                    Interest::READABLE | Interest::WRITABLE,
+                )
+                .unwrap();
+
             loop {
-                // TODO this is the simple stupid approach
-                // we should only request repaint if the last value has changed
-                // from the previous one
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                ctx.request_repaint();
+                if issue_new_write {
+                    let sendstring = match scpimode {
+                        ScpiMode::Idn => "*IDN?\n",
+                        ScpiMode::Syst => "SYST:REM\n",
+                        ScpiMode::Conf => "TODO: Handle config dynamically",
+                        ScpiMode::Meas => "MEAS?\n",
+                    };
+                    if let Ok(()) = serial.write_all(sendstring.as_bytes()) {
+                        match scpimode {
+                            ScpiMode::Syst => {
+                                scpimode = ScpiMode::Meas;
+                                issue_new_write = true;
+                            }
+                            ScpiMode::Conf => {
+                                scpimode = ScpiMode::Meas;
+                                issue_new_write = true;
+                            }
+                            _ => issue_new_write = false,
+                        }
+                    }
+                }
+
+                if let Ok(()) = poll.poll(&mut events, Some(Duration::from_millis(interval_ms))) {
+                    for event in events.iter() {
+                        if event.token() == SERIAL_TOKEN {
+                            loop {
+                                match serial.read(&mut readbuf) {
+                                    Ok(count) => {
+                                        let content = String::from_utf8_lossy(&readbuf[..count]);
+                                        if value_debug {
+                                            println!("{:?}", content);
+                                        }
+                                        if content.ends_with("\r\n") {
+                                            issue_new_write = true;
+                                            match scpimode {
+                                                ScpiMode::Idn => {
+                                                    device = content.trim_end().to_owned();
+                                                    scpimode = ScpiMode::Syst;
+                                                }
+                                                ScpiMode::Syst => {
+                                                    scpimode = ScpiMode::Meas;
+                                                }
+                                                ScpiMode::Conf => {
+                                                    scpimode = ScpiMode::Meas;
+                                                }
+                                                ScpiMode::Meas => {
+                                                    if let Ok(meas) =
+                                                        content.trim_end().parse::<f64>()
+                                                    {
+                                                        let _ = tx.send(meas).await;
+                                                        // Wake the UI when data is sent
+                                                        ctx_clone.request_repaint();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                                    Err(e) => {
+                                        println!("Serial read error: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_millis(interval_ms)).await;
             }
         });
+
+        ctx.request_repaint();
     }
 }
 
 impl eframe::App for MyApp {
-    /// Called by the frame work to save state before shutdown.
+    /// Called by the framework to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, self);
     }
 
     /// Called each time the UI needs repainting, which may be many times per second.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
-        // For inspiration and more examples, go to https://emilk.github.io/egui
         let is_web = cfg!(target_arch = "wasm32");
 
-        // on startup handle certain items once
+        // On startup, handle certain items once
         if !self.is_init {
             if let Ok(ports) = mio_serial::available_ports() {
                 for p in ports {
                     self.portlist.push_front(p.port_name);
                 }
             }
-
-            self.is_init = true
+            self.is_init = true;
         }
 
-        if let Some(serial) = &mut self.serial {
-            // Poll to check if we have serial events waiting for us.
-            let _ = self
-                .poll
-                .poll(&mut self.events, Some(Duration::from_millis(1)));
-            //println!("Poll: {:?}", res);
-
-            if self.issue_new_write {
-                let sendstring = match self.scpimode {
-                    ScpiMode::Idn => "*IDN?\n",
-                    ScpiMode::Syst => "SYST:REM\n",
-                    ScpiMode::Conf => &self.confstring, // TODO update UI only when sent successfully
-                    ScpiMode::Meas => "MEAS?\n",
-                };
-                let res = serial.write_all(sendstring.as_bytes());
-                if res.is_ok() {
-                    match self.scpimode {
-                        ScpiMode::Syst => {
-                            self.scpimode = ScpiMode::Meas;
-                            // write only command with no return data
-                            // go straight to next write
-                            self.issue_new_write = true;
-                        }
-                        ScpiMode::Conf => {
-                            self.scpimode = ScpiMode::Meas;
-                            self.confstring = "".to_owned();
-                            // write only command with no return data
-                            // go straight to next write
-                            self.issue_new_write = true;
-                        }
-                        _ => {
-                            // await read data first
-                            self.issue_new_write = false;
-                        }
-                    }
+        // Process all available measurements for smoother updates
+        if let Some(ref mut rx) = self.serial_rx {
+            while let Ok(meas) = rx.try_recv() {
+                self.curr_meas = meas;
+                self.values.push_back(meas);
+                if self.values.len() > self.mem_depth {
+                    self.values.pop_front();
                 }
-            }
-
-            // Process each event.
-            for event in self.events.iter() {
-                // Validate the token we registered our socket with,
-                // in this example it will only ever be one but we
-                // make sure it's valid none the less.
-                match event.token() {
-                    SERIAL_TOKEN => loop {
-                        // In this loop we receive all packets queued for the socket.
-                        match serial.read(&mut self.readbuf) {
-                            Ok(count) => {
-                                //println!("Count read: {:?}", count);
-                                let content = String::from_utf8_lossy(&self.readbuf[..count]);
-                                if self.value_debug {
-                                    println!("{:?}", content);
-                                }
-                                // do not send a new request until we have the result of the old one
-                                // OWON terminates everything with \r\n
-                                if content.ends_with("\r\n") {
-                                    self.issue_new_write = true;
-                                    match self.scpimode {
-                                        ScpiMode::Idn => {
-                                            // Device ID string received, save it for UI
-                                            // and move on to SYST mode
-                                            self.device = content.trim_end().to_owned();
-                                            self.scpimode = ScpiMode::Syst;
-                                        }
-                                        ScpiMode::Syst => {
-                                            // no read data, SYST commands await no response
-                                            // if anything came we just ignore it
-                                            // change to measurement mode right after
-                                            self.scpimode = ScpiMode::Meas;
-                                        }
-                                        ScpiMode::Conf => {
-                                            // see SYST, but if we have an outstanding conf
-                                            // string we stay in that state for write to handle it
-                                            if !self.confstring.is_empty() {
-                                                self.scpimode = ScpiMode::Meas;
-                                            }
-                                        }
-                                        ScpiMode::Meas => {
-                                            // measurement value mode, store if we got something new
-                                            self.curr_meas = content
-                                                .trim_end()
-                                                .parse::<f64>()
-                                                .unwrap_or(f64::NAN);
-                                            self.values.push_back(self.curr_meas);
-                                            if self.values.len() > self.mem_depth {
-                                                self.values.pop_front();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                // println!("WouldBlock escape");
-                                break;
-                            }
-                            Err(e) => {
-                                println!("Quitting due to read error: {}", e);
-                                // return Err(e);
-                                break; // TODO display this
-                            }
-                        }
-                    },
-                    _ => {
-                        // This should never happen as there is only one port open
-                    }
-                }
+                // Repaint is now triggered by the serial task
             }
         }
 
@@ -510,8 +511,6 @@ impl eframe::App for MyApp {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label("Serial port: ");
-                    // ui.add(TextEdit::singleline(&mut self.part).desired_width(800.0));
-
                     ui.add(
                         DropDownBox::from_iter(
                             &self.portlist,
@@ -528,26 +527,19 @@ impl eframe::App for MyApp {
                         self.serial = mio_serial::new(&self.serial_port, self.baud_rate)
                             .open_native_async()
                             .ok();
-                        if let Some(serial) = &mut self.serial {
-                            let _ = self.poll.registry().register(
-                                serial,
-                                SERIAL_TOKEN,
-                                Interest::READABLE | Interest::WRITABLE,
-                            );
-
-                            // configure serial session
-                            // TODO this might need to be generalized
-                            let _ = serial.set_data_bits(DataBits::Eight);
-                            let _ = serial.set_stop_bits(mio_serial::StopBits::One);
-                            let _ = serial.set_parity(mio_serial::Parity::None);
-
-                            //kick off first write
-                            self.issue_new_write = true;
-
-                            // TODO currently this does not handle the serial comms
-                            // but just request a repaint every 10ms, the serial comms
-                            // happen directly in this UI update function above
-                            Self::dispatch_serial_comms(ctx.clone());
+                        if self.serial.is_some() {
+                            let _ = self.serial.as_mut().unwrap().set_data_bits(DataBits::Eight);
+                            let _ = self
+                                .serial
+                                .as_mut()
+                                .unwrap()
+                                .set_stop_bits(mio_serial::StopBits::One);
+                            let _ = self
+                                .serial
+                                .as_mut()
+                                .unwrap()
+                                .set_parity(mio_serial::Parity::None);
+                            self.spawn_serial_task(ctx.clone());
                         }
                     }
                 });
@@ -590,7 +582,6 @@ impl eframe::App for MyApp {
                                 0.0001,
                                 &self.metermode,
                             );
-
                             ui.label(
                                 egui::RichText::new(formatted_value)
                                     .color(egui::Color32::YELLOW)
@@ -761,10 +752,10 @@ impl eframe::App for MyApp {
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "CONT");
                                 self.curr_range = 0;
                             }
-                            let cont_btn = egui::Button::new("Temp")
+                            let temp_btn = egui::Button::new("Temp")
                                 .selected(self.metermode == MeterMode::Temp)
                                 .min_size(btn_size);
-                            if ui.add(cont_btn).clicked() {
+                            if ui.add(temp_btn).clicked() {
                                 self.metermode = MeterMode::Temp;
                                 self.curr_unit = "°C".to_owned();
                                 // TODO temp mode needs more selections like sensor typ, unit etc.
@@ -843,7 +834,7 @@ impl eframe::App for MyApp {
                     .include_x(self.mem_depth as f64);
                 plot.show(ui, |plot_ui| {
                     plot_ui.line(line);
-                })
+                });
             });
 
             ui.separator();
@@ -857,7 +848,7 @@ impl eframe::App for MyApp {
                 egui::warn_if_debug_build(ui);
             });
 
-            //settings window
+            // Settings window with polling rate adjustment
             if self.settings_open {
                 Window::new("Settings")
                     .auto_sized()
@@ -886,6 +877,23 @@ impl eframe::App for MyApp {
                                 TextEdit::singleline(&mut self.stop_bits.to_string())
                                     .desired_width(800.0),
                             );
+                            ui.label("Serial poll interval (ms):");
+                            let mut interval_str = self.poll_interval_ms.to_string();
+                            if ui
+                                .add(
+                                    TextEdit::singleline(&mut interval_str)
+                                        .desired_width(800.0)
+                                        .hint_text("Enter polling interval in ms"),
+                                )
+                                .changed()
+                            {
+                                if let Ok(new_interval) = interval_str.parse::<u64>() {
+                                    if new_interval > 0 {
+                                        self.poll_interval_ms = new_interval;
+                                    }
+                                }
+                            }
+                            ui.label("Note: Reconnect required to apply new poll interval");
                             if ui.button("Close").clicked() {
                                 self.settings_open = false;
                             }
