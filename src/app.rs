@@ -227,9 +227,10 @@ pub struct MyApp {
     connect_on_startup: bool,
     value_debug: bool,
     poll_interval_ms: u64,
-    beeper_enabled: bool, // New field for beeper state, persistent
-    cont_threshold: u32,  // Persistent continuity threshold (0-1000 ohms)
-    diod_threshold: f32,  // Persistent diode threshold (0-3.0 volts)
+    graph_update_interval_ms: u64, // New field for graph update rate
+    beeper_enabled: bool,          // New field for beeper state, persistent
+    cont_threshold: u32,           // Persistent continuity threshold (0-1000 ohms)
+    diod_threshold: f32,           // Persistent diode threshold (0-3.0 volts)
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -282,6 +283,10 @@ pub struct MyApp {
     value_debug_shared: Arc<Mutex<bool>>, // Shared debug flag for live updates
     #[serde(skip)]
     poll_interval_shared: Arc<Mutex<u64>>, // Shared poll interval for live updates
+    #[serde(skip)]
+    graph_update_interval_shared: Arc<Mutex<u64>>, // Shared graph update interval
+    #[serde(skip)]
+    last_graph_update: f64, // Track last graph update time
 }
 
 impl Default for MyApp {
@@ -321,11 +326,14 @@ impl Default for MyApp {
             serial_rx: None,
             serial_tx: None,
             poll_interval_ms: 20,
-            beeper_enabled: true, // Default to on, per meter spec
-            cont_threshold: 50,   // Default continuity threshold: 50 ohms
-            diod_threshold: 2.0,  // Default diode threshold: 2.0 volts (mid-range)
+            graph_update_interval_ms: 50, // Default graph update interval: 50ms
+            beeper_enabled: true,         // Default to on, per meter spec
+            cont_threshold: 50,           // Default continuity threshold: 50 ohms
+            diod_threshold: 2.0,          // Default diode threshold: 2.0 volts (mid-range)
             value_debug_shared: Arc::new(Mutex::new(false)),
             poll_interval_shared: Arc::new(Mutex::new(20)),
+            graph_update_interval_shared: Arc::new(Mutex::new(50)), // Default shared value
+            last_graph_update: 0.0,                                 // Initialize to 0
         }
     }
 }
@@ -359,12 +367,14 @@ impl MyApp {
             let app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
             *app.value_debug_shared.lock().unwrap() = app.value_debug;
             *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
+            *app.graph_update_interval_shared.lock().unwrap() = app.graph_update_interval_ms;
             return app;
         }
 
         let app = Self::default();
         *app.value_debug_shared.lock().unwrap() = app.value_debug;
         *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
+        *app.graph_update_interval_shared.lock().unwrap() = app.graph_update_interval_ms;
         app
     }
 
@@ -402,6 +412,7 @@ impl MyApp {
             command_queue.push_back("*IDN?\n".to_string());
 
             loop {
+                // Fetch the latest shared values at the start of each loop iteration
                 let debug = *value_debug_shared.lock().unwrap();
                 let interval = *poll_interval_shared.lock().unwrap();
 
@@ -415,7 +426,7 @@ impl MyApp {
                     }
                 }
 
-                // Poll for events
+                // Poll for events with the current interval
                 if poll
                     .poll(&mut events, Some(Duration::from_millis(interval)))
                     .is_ok()
@@ -519,11 +530,23 @@ impl MyApp {
                     }
                 }
 
+                // Use the current interval for the sleep duration
                 tokio::time::sleep(Duration::from_millis(interval)).await;
             }
         });
+    }
 
-        ctx.request_repaint();
+    fn spawn_graph_update_task(&mut self, ctx: Context) {
+        let graph_update_interval_shared = self.graph_update_interval_shared.clone();
+        let ctx = ctx.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let interval = *graph_update_interval_shared.lock().unwrap();
+                ctx.request_repaint(); // Trigger a repaint to update the graph
+                tokio::time::sleep(Duration::from_millis(interval)).await;
+            }
+        });
     }
 
     fn set_mode(
@@ -622,17 +645,22 @@ impl eframe::App for MyApp {
                     self.device = device; // Update self.device when IDN response arrives
                 }
                 if let Some(meas) = meas_opt {
-                    self.curr_meas = meas;
+                    self.curr_meas = meas; // Update curr_meas with new data
                 }
             }
-            // Always update the graph with the latest curr_meas, even if no new value
+        }
+
+        // Handle graph updates based on the configured interval
+        let current_time = ctx.input(|i| i.time); // Get current time in seconds
+        let graph_interval = *self.graph_update_interval_shared.lock().unwrap() as f64 / 1000.0; // Convert ms to seconds
+        if current_time - self.last_graph_update >= graph_interval {
             if !self.curr_meas.is_nan() {
                 self.values.push_back(self.curr_meas);
                 while self.values.len() > self.mem_depth {
                     self.values.pop_front();
                 }
             }
-            ctx.request_repaint(); // Ensure consistent repaint
+            self.last_graph_update = current_time;
         }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -691,6 +719,7 @@ impl eframe::App for MyApp {
                                 .unwrap()
                                 .set_parity(mio_serial::Parity::None);
                             self.spawn_serial_task(ctx.clone());
+                            self.spawn_graph_update_task(ctx.clone()); // Start graph update task
                         }
                     }
                 });
@@ -1133,7 +1162,24 @@ impl eframe::App for MyApp {
                                     }
                                 }
                             }
-                            ui.label("Note: Reconnect required to apply new poll interval");
+                            ui.label("Graph update interval (ms):");
+                            let mut graph_interval_str = self.graph_update_interval_ms.to_string();
+                            if ui
+                                .add(
+                                    TextEdit::singleline(&mut graph_interval_str)
+                                        .desired_width(800.0)
+                                        .hint_text("Enter graph update interval in ms"),
+                                )
+                                .changed()
+                            {
+                                if let Ok(new_interval) = graph_interval_str.parse::<u64>() {
+                                    if new_interval > 0 {
+                                        self.graph_update_interval_ms = new_interval;
+                                        *self.graph_update_interval_shared.lock().unwrap() =
+                                            new_interval;
+                                    }
+                                }
+                            }
                             ui.label("Maximum graph memory depth:");
                             let mut max_depth_str = self.mem_depth_max.to_string();
                             if ui
