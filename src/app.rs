@@ -5,7 +5,9 @@ use std::{
     time::Duration,
 };
 
-use egui::{Context, FontData, FontDefinitions, FontFamily, FontId, TextEdit, Vec2, Window};
+use egui::{
+    Context, FontData, FontDefinitions, FontFamily, FontId, SliderClamping, TextEdit, Vec2, Window,
+};
 use egui_dropdown::DropDownBox;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use mio::{Events, Interest, Poll, Token};
@@ -15,7 +17,7 @@ use phf::{phf_ordered_map, OrderedMap};
 use std::io;
 use tempfile::{Builder, TempDir};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 mod helpers;
 use helpers::format_measurement;
@@ -270,7 +272,9 @@ pub struct MyApp {
     #[serde(skip)]
     curr_range: usize,
     #[serde(skip)]
-    serial_rx: Option<Receiver<f64>>,
+    serial_rx: Option<Receiver<(Option<String>, Option<f64>)>>, // Updated to handle device ID and measurements
+    #[serde(skip)]
+    serial_tx: Option<Sender<String>>, // New channel for sending commands to serial task
 }
 
 impl Default for MyApp {
@@ -308,6 +312,7 @@ impl Default for MyApp {
             rangecmd: Some(RangeCmd::default()),
             curr_range: 0,
             serial_rx: None,
+            serial_tx: None, // Initialize as None
             poll_interval_ms: 20,
         }
     }
@@ -351,8 +356,10 @@ impl MyApp {
             return;
         }
 
-        let (tx, rx) = mpsc::channel::<f64>(100);
-        self.serial_rx = Some(rx);
+        let (tx_data, rx_data) = mpsc::channel::<(Option<String>, Option<f64>)>(100); // Channel for data (device ID, measurements)
+        let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // New channel for commands
+        self.serial_rx = Some(rx_data);
+        self.serial_tx = Some(tx_cmd.clone()); // Store the sender for UI use
 
         let mut serial = self.serial.take().unwrap();
         let interval_ms = self.poll_interval_ms;
@@ -366,7 +373,6 @@ impl MyApp {
             let mut events = Events::with_capacity(1);
             let mut readbuf = [0u8; 1024];
             let mut scpimode = ScpiMode::Idn;
-            let mut device = String::new();
             let mut issue_new_write = true;
 
             poll.registry()
@@ -378,20 +384,29 @@ impl MyApp {
                 .unwrap();
 
             loop {
+                // Check for UI commands first
+                if let Ok(cmd) = rx_cmd.try_recv() {
+                    if let Ok(()) = serial.write_all(cmd.as_bytes()) {
+                        // If it's a configuration command, switch to Meas mode after sending
+                        if cmd.starts_with("CONF:") {
+                            scpimode = ScpiMode::Meas;
+                            issue_new_write = true; // Trigger MEAS? next
+                        }
+                    }
+                    continue; // Prioritize handling commands
+                }
+
+                // Handle predefined startup sequence or MEAS? if no UI command
                 if issue_new_write {
                     let sendstring = match scpimode {
                         ScpiMode::Idn => "*IDN?\n",
                         ScpiMode::Syst => "SYST:REM\n",
-                        ScpiMode::Conf => "TODO: Handle config dynamically",
+                        ScpiMode::Conf => unreachable!("CONF handled via rx_cmd"),
                         ScpiMode::Meas => "MEAS?\n",
                     };
                     if let Ok(()) = serial.write_all(sendstring.as_bytes()) {
                         match scpimode {
                             ScpiMode::Syst => {
-                                scpimode = ScpiMode::Meas;
-                                issue_new_write = true;
-                            }
-                            ScpiMode::Conf => {
                                 scpimode = ScpiMode::Meas;
                                 issue_new_write = true;
                             }
@@ -414,7 +429,9 @@ impl MyApp {
                                             issue_new_write = true;
                                             match scpimode {
                                                 ScpiMode::Idn => {
-                                                    device = content.trim_end().to_owned();
+                                                    let device = content.trim_end().to_owned();
+                                                    let _ =
+                                                        tx_data.send((Some(device), None)).await;
                                                     scpimode = ScpiMode::Syst;
                                                 }
                                                 ScpiMode::Syst => {
@@ -427,7 +444,8 @@ impl MyApp {
                                                     if let Ok(meas) =
                                                         content.trim_end().parse::<f64>()
                                                     {
-                                                        let _ = tx.send(meas).await;
+                                                        let _ =
+                                                            tx_data.send((None, Some(meas))).await;
                                                         // Wake the UI when data is sent
                                                         ctx_clone.request_repaint();
                                                     }
@@ -474,14 +492,19 @@ impl eframe::App for MyApp {
             self.is_init = true;
         }
 
-        // Process all available measurements for smoother updates
+        // Process all available messages (device ID or measurements)
         if let Some(ref mut rx) = self.serial_rx {
-            while let Ok(meas) = rx.try_recv() {
-                self.curr_meas = meas;
-                self.values.push_back(meas);
-                // Trim values if exceeding mem_depth, keeping most recent
-                while self.values.len() > self.mem_depth {
-                    self.values.pop_front();
+            while let Ok((device_opt, meas_opt)) = rx.try_recv() {
+                if let Some(device) = device_opt {
+                    self.device = device; // Update self.device when IDN response arrives
+                }
+                if let Some(meas) = meas_opt {
+                    self.curr_meas = meas;
+                    self.values.push_back(meas);
+                    // Trim values if exceeding mem_depth, keeping most recent
+                    while self.values.len() > self.mem_depth {
+                        self.values.pop_front();
+                    }
                 }
             }
         }
@@ -628,8 +651,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Vdc;
                                 self.curr_unit = "VDC".to_owned();
                                 self.confstring = "CONF:VOLT:DC AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "VDC");
                                 self.curr_range = 0;
@@ -641,8 +665,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Vac;
                                 self.curr_unit = "VAC".to_owned();
                                 self.confstring = "CONF:VOLT:AC AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "VAC");
                                 self.curr_range = 0;
@@ -654,8 +679,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Adc;
                                 self.curr_unit = "ADC".to_owned();
                                 self.confstring = "CONF:CURR:DC AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "ADC");
                                 self.curr_range = 0;
@@ -667,8 +693,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Aac;
                                 self.curr_unit = "AAC".to_owned();
                                 self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "AAC");
                                 self.curr_range = 0;
@@ -682,8 +709,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Res;
                                 self.curr_unit = "Ohm".to_owned();
                                 self.confstring = "CONF:RES AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "RES");
                                 self.curr_range = 0;
@@ -695,8 +723,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Cap;
                                 self.curr_unit = "F".to_owned();
                                 self.confstring = "CONF:CAP AUTO\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "CAP");
                                 self.curr_range = 0;
@@ -708,8 +737,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Freq;
                                 self.curr_unit = "Hz".to_owned();
                                 self.confstring = "CONF:FREQ\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "FREQ");
                                 self.curr_range = 0;
@@ -721,8 +751,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Per;
                                 self.curr_unit = "s".to_owned();
                                 self.confstring = "CONF:PER\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "PER");
                                 self.curr_range = 0;
@@ -736,8 +767,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Diod;
                                 self.curr_unit = "V".to_owned();
                                 self.confstring = "CONF:DIOD\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "DIOD");
                                 self.curr_range = 0;
@@ -749,8 +781,9 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Cont;
                                 self.curr_unit = "Ohm".to_owned();
                                 self.confstring = "CONF:CONT\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "CONT");
                                 self.curr_range = 0;
@@ -763,8 +796,9 @@ impl eframe::App for MyApp {
                                 self.curr_unit = "°C".to_owned();
                                 // TODO temp mode needs more selections like sensor typ, unit etc.
                                 self.confstring = "CONF:TEMP:RTD PT100\n".to_owned();
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "TEMP");
                                 self.curr_range = 0;
@@ -797,8 +831,9 @@ impl eframe::App for MyApp {
                             self.confstring = self
                                 .ratecmd
                                 .gen_scpi(self.ratecmd.opts.index(self.curr_rate).unwrap().0);
-                            self.scpimode = ScpiMode::Conf;
-                            self.issue_new_write = true;
+                            if let Some(ref tx) = self.serial_tx {
+                                let _ = tx.try_send(self.confstring.clone());
+                            }
                             if self.value_debug {
                                 println!("Selected Rate changed: {}", self.confstring);
                             }
@@ -813,8 +848,9 @@ impl eframe::App for MyApp {
                             if rangebox.changed() {
                                 self.confstring = rangecmd
                                     .gen_scpi(rangecmd.opts.index(self.curr_range).unwrap().0);
-                                self.scpimode = ScpiMode::Conf;
-                                self.issue_new_write = true;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let _ = tx.try_send(self.confstring.clone());
+                                }
                                 if self.value_debug {
                                     println!("Selected Range changed: {}", self.confstring);
                                 }
@@ -849,7 +885,7 @@ impl eframe::App for MyApp {
                     egui::Slider::new(&mut self.mem_depth, 10..=self.mem_depth_max)
                         .text("Memory Depth")
                         .step_by(10.0) // Step by 10 for smoother control
-                        .clamp_to_range(true),
+                        .clamping(SliderClamping::Always), // Updated from clamp_to_range
                 );
             });
 
