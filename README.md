@@ -13,12 +13,11 @@ with neat graphing, recording, using it on stream etc.
 Eventually, as this is all SCPI based, it could also be extended to other meters that have SCPI interfaces.
 Maybe some stuff even works out of the box.
 
-**NOTE:** This is work and progress and I have more features for this in mind. what works right now is connecting to the multimeter, switching modes and ranges as well as sampling rates. You also get nice graphing for the last 500 samples.
+**NOTE:** This is work and progress and I have more features for this in mind. what works right now is connecting to the multimeter, switching modes and ranges as well as sampling rates. You also get nice graphing for a configureable amount of last samples.
 
 **TODO:**
 
 - math modes
-- continuity threshold
 - code refactoring for easier integration of other meters
 - make serial parameters changeable
 - csv record export
