@@ -418,18 +418,10 @@ impl MyApp {
                 }
 
                 // Poll for events
-                if debug {
-                    println!("Polling with interval: {}ms", interval);
-                }
                 if poll
                     .poll(&mut events, Some(Duration::from_millis(interval)))
                     .is_ok()
                 {
-                    if debug {
-                        let event_list: Vec<_> = events.iter().collect();
-                        println!("Poll events: {:?}", event_list);
-                    }
-
                     // Handle reads
                     for event in events.iter() {
                         if event.token() == SERIAL_TOKEN && event.is_readable() {
@@ -452,20 +444,16 @@ impl MyApp {
                                                     scpimode = ScpiMode::Syst;
                                                     command_queue
                                                         .push_back("SYST:REM\n".to_string());
-                                                    // Force Meas transition to kickstart polling
                                                     scpimode = ScpiMode::Meas;
                                                     command_queue.push_back("MEAS?\n".to_string());
                                                 }
-                                                ScpiMode::Syst => {
-                                                    // Shouldn't reach here with response, but handle anyway
-                                                }
+                                                ScpiMode::Syst => {}
                                                 ScpiMode::Meas => {
                                                     if let Ok(meas) =
                                                         content.trim_end().parse::<f64>()
                                                     {
                                                         let _ =
                                                             tx_data.send((None, Some(meas))).await;
-                                                        ctx_clone.request_repaint();
                                                     }
                                                 }
                                             }
@@ -495,7 +483,7 @@ impl MyApp {
                     if !command_queue.is_empty() && !awaiting_response {
                         if let Some(cmd) = command_queue.front() {
                             if debug {
-                                println!("Attempting to send: {:?}", cmd);
+                                println!("Sending: {:?}", cmd);
                             }
                             match serial.write_all(cmd.as_bytes()) {
                                 Ok(()) => {
@@ -509,10 +497,7 @@ impl MyApp {
                                     }
                                     awaiting_response = cmd.ends_with("?\n");
                                     if debug {
-                                        println!(
-                                            "Command sent: {:?}, awaiting_response: {}",
-                                            cmd, awaiting_response
-                                        );
+                                        println!("Command sent: {:?}", cmd);
                                     }
                                 }
                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -530,15 +515,16 @@ impl MyApp {
                             }
                         }
                     }
-                } else if debug {
-                    println!("Poll failed or timed out");
                 }
 
-                // Ensure continuous polling in Meas mode
-                if command_queue.is_empty() && !awaiting_response && scpimode == ScpiMode::Meas {
-                    command_queue.push_back("MEAS?\n".to_string());
-                    if debug {
-                        println!("Queued MEAS? for polling");
+                // Controlled polling in Meas mode, allow up to 2 MEAS? commands
+                if !awaiting_response && scpimode == ScpiMode::Meas {
+                    let meas_count = command_queue.iter().filter(|cmd| *cmd == "MEAS?\n").count();
+                    if meas_count < 2 {
+                        command_queue.push_back("MEAS?\n".to_string());
+                        if debug {
+                            println!("Queued MEAS? for polling");
+                        }
                     }
                 }
 
@@ -646,24 +632,29 @@ impl eframe::App for MyApp {
                 }
                 if let Some(meas) = meas_opt {
                     self.curr_meas = meas;
-                    self.values.push_back(meas);
-                    // Trim values if exceeding mem_depth, keeping most recent
-                    while self.values.len() > self.mem_depth {
-                        self.values.pop_front();
-                    }
                 }
             }
+            // Always update the graph with the latest curr_meas, even if no new value
+            if !self.curr_meas.is_nan() {
+                self.values.push_back(self.curr_meas);
+                while self.values.len() > self.mem_depth {
+                    self.values.pop_front();
+                }
+            }
+            ctx.request_repaint(); // Ensure consistent repaint
         }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            // The top panel is often a good place for a menu bar:
             egui::menu::bar(ui, |ui| {
-                // NOTE: no File->Quit on web pages!
                 ui.menu_button("File", |ui| {
                     if ui.button("Settings").clicked() {
                         self.settings_open = true;
                     }
                     if !is_web && ui.button("Quit").clicked() {
+                        if let Some(ref mut tx) = self.serial_tx {
+                            let _ = tx.try_send("*RST\n".to_string()); // Reset meter
+                        }
+                        self.serial_tx = None; // Drop sender to stop task
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
@@ -673,7 +664,6 @@ impl eframe::App for MyApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            // The central panel the region left after adding TopPanel's and SidePanel's
             if is_web {
                 ui.heading("RustyMeter");
             }
