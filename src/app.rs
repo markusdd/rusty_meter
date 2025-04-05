@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     io::{Read, Write},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use egui::{
@@ -21,6 +21,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 mod helpers;
 use helpers::format_measurement;
+use helpers::powered_by;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -37,6 +38,7 @@ pub trait GenScpi {
     fn gen_scpi(&self, opt_name: &str) -> String;
 }
 
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum ScpiMode {
     Idn,
     Syst,
@@ -278,8 +280,6 @@ pub struct MyApp {
     #[serde(skip)]
     serial_tx: Option<Sender<String>>, // New channel for sending commands to serial task
     #[serde(skip)]
-    last_threshold_change: Option<Instant>, // For debouncing threshold updates
-    #[serde(skip)]
     value_debug_shared: Arc<Mutex<bool>>, // Shared debug flag for live updates
     #[serde(skip)]
     poll_interval_shared: Arc<Mutex<u64>>, // Shared poll interval for live updates
@@ -325,7 +325,6 @@ impl Default for MyApp {
             beeper_enabled: true, // Default to on, per meter spec
             cont_threshold: 50,   // Default continuity threshold: 50 ohms
             diod_threshold: 2.0,  // Default diode threshold: 2.0 volts (mid-range)
-            last_threshold_change: None,
             value_debug_shared: Arc::new(Mutex::new(false)),
             poll_interval_shared: Arc::new(Mutex::new(20)),
         }
@@ -358,13 +357,13 @@ impl MyApp {
         // Load previous app state (if any).
         // Note that you must enable the `persistence` feature for this to work.
         if let Some(storage) = cc.storage {
-            let mut app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
+            let app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
             *app.value_debug_shared.lock().unwrap() = app.value_debug;
             *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
             return app;
         }
 
-        let mut app = Self::default();
+        let app = Self::default();
         *app.value_debug_shared.lock().unwrap() = app.value_debug;
         *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
         app
@@ -376,7 +375,7 @@ impl MyApp {
         }
 
         let (tx_data, rx_data) = mpsc::channel::<(Option<String>, Option<f64>)>(100); // Channel for data (device ID, measurements)
-        let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // New channel for commands
+        let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // Channel for commands
         self.serial_rx = Some(rx_data);
         self.serial_tx = Some(tx_cmd.clone());
 
@@ -390,7 +389,8 @@ impl MyApp {
             let mut events = Events::with_capacity(1);
             let mut readbuf = [0u8; 1024];
             let mut scpimode = ScpiMode::Idn;
-            let mut issue_new_write = true;
+            let mut command_queue: VecDeque<String> = VecDeque::new();
+            let mut awaiting_response = false;
 
             poll.registry()
                 .register(
@@ -400,75 +400,64 @@ impl MyApp {
                 )
                 .unwrap();
 
+            // Initial command to identify device
+            command_queue.push_back("*IDN?\n".to_string());
+
             loop {
-                // Check for UI commands first
-                if let Ok(cmd) = rx_cmd.try_recv() {
-                    let debug = *value_debug_shared.lock().unwrap();
-                    if debug {
-                        println!("Sending: {:?}", cmd);
-                    }
-                    match serial.write_all(cmd.as_bytes()) {
-                        Ok(()) => {
-                            // If it's a configuration command, switch to Meas mode after sending
-                            if cmd.starts_with("CONF:") {
-                                scpimode = ScpiMode::Meas;
-                                issue_new_write = true; // Trigger MEAS? next
-                            }
-                        }
-                        Err(e) => {
-                            if debug {
-                                println!("Failed to send command {:?}: {}", cmd, e);
-                            }
-                        }
-                    }
-                    continue; // Prioritize handling commands
-                }
-
-                // Handle predefined startup sequence or MEAS? if no UI command
-                if issue_new_write {
-                    let sendstring = match scpimode {
-                        ScpiMode::Idn => "*IDN?\n",
-                        ScpiMode::Syst => "SYST:REM\n",
-                        ScpiMode::Meas => "MEAS?\n",
-                    };
-                    let debug = *value_debug_shared.lock().unwrap();
-                    if debug {
-                        println!("Sending: {:?}", sendstring);
-                    }
-                    if let Ok(()) = serial.write_all(sendstring.as_bytes()) {
-                        match scpimode {
-                            ScpiMode::Syst => {
-                                scpimode = ScpiMode::Meas;
-                                issue_new_write = true;
-                            }
-                            _ => issue_new_write = false,
-                        }
-                    }
-                }
-
+                let debug = *value_debug_shared.lock().unwrap();
                 let interval = *poll_interval_shared.lock().unwrap();
-                if let Ok(()) = poll.poll(&mut events, Some(Duration::from_millis(interval))) {
+
+                // Queue new commands from UI if not awaiting a response
+                if !awaiting_response {
+                    while let Ok(cmd) = rx_cmd.try_recv() {
+                        if debug {
+                            println!("Queuing command: {:?}", cmd);
+                        }
+                        command_queue.push_back(cmd);
+                    }
+                }
+
+                // Poll for events
+                if debug {
+                    println!("Polling with interval: {}ms", interval);
+                }
+                if poll
+                    .poll(&mut events, Some(Duration::from_millis(interval)))
+                    .is_ok()
+                {
+                    if debug {
+                        let event_list: Vec<_> = events.iter().collect();
+                        println!("Poll events: {:?}", event_list);
+                    }
+
+                    // Handle reads
                     for event in events.iter() {
-                        if event.token() == SERIAL_TOKEN {
+                        if event.token() == SERIAL_TOKEN && event.is_readable() {
                             loop {
                                 match serial.read(&mut readbuf) {
                                     Ok(count) => {
                                         let content = String::from_utf8_lossy(&readbuf[..count]);
-                                        let debug = *value_debug_shared.lock().unwrap();
                                         if debug {
                                             println!("Received: {:?}", content);
                                         }
                                         if content.ends_with("\r\n") {
-                                            issue_new_write = true;
                                             match scpimode {
                                                 ScpiMode::Idn => {
-                                                    let device = content.trim_end().to_owned();
-                                                    let _ =
-                                                        tx_data.send((Some(device), None)).await;
+                                                    let _ = tx_data
+                                                        .send((
+                                                            Some(content.trim_end().to_owned()),
+                                                            None,
+                                                        ))
+                                                        .await;
                                                     scpimode = ScpiMode::Syst;
+                                                    command_queue
+                                                        .push_back("SYST:REM\n".to_string());
+                                                    // Force Meas transition to kickstart polling
+                                                    scpimode = ScpiMode::Meas;
+                                                    command_queue.push_back("MEAS?\n".to_string());
                                                 }
                                                 ScpiMode::Syst => {
-                                                    scpimode = ScpiMode::Meas;
+                                                    // Shouldn't reach here with response, but handle anyway
                                                 }
                                                 ScpiMode::Meas => {
                                                     if let Ok(meas) =
@@ -480,16 +469,76 @@ impl MyApp {
                                                     }
                                                 }
                                             }
+                                            awaiting_response = false;
+                                            if debug {
+                                                println!(
+                                                    "Response processed, scpimode: {:?}",
+                                                    scpimode
+                                                );
+                                            }
                                         }
                                     }
                                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
                                     Err(e) => {
-                                        println!("Serial read error: {}", e);
+                                        if debug {
+                                            println!("Serial read error: {}", e);
+                                        }
+                                        awaiting_response = false;
                                         break;
                                     }
                                 }
                             }
                         }
+                    }
+
+                    // Handle writes
+                    if !command_queue.is_empty() && !awaiting_response {
+                        if let Some(cmd) = command_queue.front() {
+                            if debug {
+                                println!("Attempting to send: {:?}", cmd);
+                            }
+                            match serial.write_all(cmd.as_bytes()) {
+                                Ok(()) => {
+                                    let cmd = command_queue.pop_front().unwrap();
+                                    if cmd.starts_with("CONF:") {
+                                        scpimode = ScpiMode::Meas;
+                                        command_queue.push_back("MEAS?\n".to_string());
+                                    } else if cmd == "SYST:REM\n" {
+                                        scpimode = ScpiMode::Meas;
+                                        command_queue.push_back("MEAS?\n".to_string());
+                                    }
+                                    awaiting_response = cmd.ends_with("?\n");
+                                    if debug {
+                                        println!(
+                                            "Command sent: {:?}, awaiting_response: {}",
+                                            cmd, awaiting_response
+                                        );
+                                    }
+                                }
+                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                    if debug {
+                                        println!("Serial write would block for {:?}, waiting", cmd);
+                                    }
+                                }
+                                Err(e) => {
+                                    if debug {
+                                        println!("Failed to send command {:?}: {}", cmd, e);
+                                    }
+                                    command_queue.pop_front();
+                                    awaiting_response = false;
+                                }
+                            }
+                        }
+                    }
+                } else if debug {
+                    println!("Poll failed or timed out");
+                }
+
+                // Ensure continuous polling in Meas mode
+                if command_queue.is_empty() && !awaiting_response && scpimode == ScpiMode::Meas {
+                    command_queue.push_back("MEAS?\n".to_string());
+                    if debug {
+                        println!("Queued MEAS? for polling");
                     }
                 }
 
@@ -528,30 +577,37 @@ impl MyApp {
                     format!("DIOD:THREshold {}\n", diod_threshold)
                 };
                 tokio::spawn(async move {
-                    if let Err(e) = tx.send(mode_cmd).await {
+                    // Queue commands without delays
+                    if let Err(e) = tx.send(mode_cmd.clone()).await {
                         if value_debug {
                             println!("Failed to queue mode command: {}", e);
                         }
+                    } else if value_debug {
+                        println!("Mode command queued: {}", mode_cmd);
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await; // Give meter time to settle
-                    if let Err(e) = tx.send(beeper_cmd).await {
+                    if let Err(e) = tx.send(beeper_cmd.clone()).await {
                         if value_debug {
                             println!("Failed to queue beeper command: {}", e);
                         }
+                    } else if value_debug {
+                        println!("Beeper command queued: {}", beeper_cmd);
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await; // Ensure sequential processing
-                    if let Err(e) = tx.send(threshold_cmd).await {
+                    if let Err(e) = tx.send(threshold_cmd.clone()).await {
                         if value_debug {
                             println!("Failed to queue threshold command: {}", e);
                         }
+                    } else if value_debug {
+                        println!("Threshold command queued: {}", threshold_cmd);
                     }
                 });
             } else {
                 tokio::spawn(async move {
-                    if let Err(e) = tx.send(mode_cmd).await {
+                    if let Err(e) = tx.send(mode_cmd.clone()).await {
                         if value_debug {
                             println!("Failed to queue command: {}", e);
                         }
+                    } else if value_debug {
+                        println!("Command queued: {}", mode_cmd);
                     }
                 });
             }
@@ -947,12 +1003,6 @@ impl eframe::App for MyApp {
                                 }
                             }
 
-                            let now = Instant::now();
-                            let should_debounce =
-                                self.last_threshold_change.map_or(false, |last| {
-                                    now.duration_since(last) < Duration::from_millis(500)
-                                });
-
                             if self.metermode == MeterMode::Cont {
                                 let threshold_slider = ui.add(
                                     egui::Slider::new(&mut self.cont_threshold, 0..=1000)
@@ -960,11 +1010,7 @@ impl eframe::App for MyApp {
                                         .step_by(1.0)
                                         .clamping(SliderClamping::Always),
                                 );
-                                if threshold_slider.changed() {
-                                    self.last_threshold_change = Some(now);
-                                }
-                                if (threshold_slider.drag_stopped() || !should_debounce)
-                                    && self.last_threshold_change.is_some()
+                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
                                 {
                                     if let Some(tx) = self.serial_tx.clone() {
                                         let cmd =
@@ -981,9 +1027,6 @@ impl eframe::App for MyApp {
                                             }
                                         });
                                     }
-                                    if threshold_slider.drag_stopped() {
-                                        self.last_threshold_change = None; // Reset after sending final value
-                                    }
                                 }
                             } else if self.metermode == MeterMode::Diod {
                                 let threshold_slider = ui.add(
@@ -992,11 +1035,7 @@ impl eframe::App for MyApp {
                                         .step_by(0.1)
                                         .clamping(SliderClamping::Always),
                                 );
-                                if threshold_slider.changed() {
-                                    self.last_threshold_change = Some(now);
-                                }
-                                if (threshold_slider.drag_stopped() || !should_debounce)
-                                    && self.last_threshold_change.is_some()
+                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
                                 {
                                     if let Some(tx) = self.serial_tx.clone() {
                                         let cmd =
@@ -1012,9 +1051,6 @@ impl eframe::App for MyApp {
                                                 }
                                             }
                                         });
-                                    }
-                                    if threshold_slider.drag_stopped() {
-                                        self.last_threshold_change = None; // Reset after sending final value
                                     }
                                 }
                             }
@@ -1149,25 +1185,4 @@ impl eframe::App for MyApp {
             }
         });
     }
-}
-
-fn powered_by(ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.label("Powered by ");
-        ui.hyperlink_to("egui", "https://github.com/emilk/egui");
-        ui.label(", ");
-        ui.hyperlink_to(
-            "eframe",
-            "https://github.com/emilk/egui/tree/master/crates/eframe",
-        );
-        ui.label(", ");
-        ui.hyperlink_to("B612 Font", "https://b612-font.com/");
-        ui.label(" and ");
-        ui.hyperlink_to(
-            "TheHWCave",
-            "https://github.com/TheHWcave/OWON-XDM1041/tree/main",
-        );
-        ui.label(".");
-    });
 }

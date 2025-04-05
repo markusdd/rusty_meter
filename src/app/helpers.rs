@@ -105,3 +105,24 @@ pub fn format_measurement(
 
     (formatted_value, display_unit)
 }
+
+pub fn powered_by(ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.label("Powered by ");
+        ui.hyperlink_to("egui", "https://github.com/emilk/egui");
+        ui.label(", ");
+        ui.hyperlink_to(
+            "eframe",
+            "https://github.com/emilk/egui/tree/master/crates/eframe",
+        );
+        ui.label(", ");
+        ui.hyperlink_to("B612 Font", "https://b612-font.com/");
+        ui.label(" and ");
+        ui.hyperlink_to(
+            "TheHWCave",
+            "https://github.com/TheHWcave/OWON-XDM1041/tree/main",
+        );
+        ui.label(".");
+    });
+}
