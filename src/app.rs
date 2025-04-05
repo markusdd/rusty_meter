@@ -258,7 +258,7 @@ pub struct MyApp {
     #[serde(skip)]
     serial: Option<SerialStream>,
     #[serde(skip)]
-    device: String,
+    device: Arc<Mutex<String>>, // Changed to shared ownership
     #[serde(skip)]
     ports: Vec<SerialPortInfo>,
     #[serde(skip)]
@@ -276,9 +276,9 @@ pub struct MyApp {
     #[serde(skip)]
     curr_range: usize,
     #[serde(skip)]
-    serial_rx: Option<Receiver<(Option<String>, Option<f64>)>>, // Updated to handle device ID and measurements
+    serial_rx: Option<Receiver<Option<f64>>>, // handle measurements
     #[serde(skip)]
-    serial_tx: Option<Sender<String>>, // New channel for sending commands to serial task
+    serial_tx: Option<Sender<String>>, // channel for sending commands to serial task
     #[serde(skip)]
     value_debug_shared: Arc<Mutex<bool>>, // Shared debug flag for live updates
     #[serde(skip)]
@@ -314,7 +314,7 @@ impl Default for MyApp {
             poll: Poll::new().unwrap(),
             events: Events::with_capacity(1),
             serial: None,
-            device: "".to_owned(),
+            device: Arc::new(Mutex::new("".to_owned())), // Initialize as shared
             ports: vec![],
             tempdir: Builder::new().prefix("rustymeter").tempdir().ok(),
             settings_open: false,
@@ -378,12 +378,12 @@ impl MyApp {
         app
     }
 
-    fn spawn_serial_task(&mut self, ctx: Context) {
+    fn spawn_serial_task(&mut self) {
         if self.serial.is_none() {
             return;
         }
 
-        let (tx_data, rx_data) = mpsc::channel::<(Option<String>, Option<f64>)>(100); // Channel for data (device ID, measurements)
+        let (tx_data, rx_data) = mpsc::channel::<Option<f64>>(100); // Channel for measurements only
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // Channel for commands
         self.serial_rx = Some(rx_data);
         self.serial_tx = Some(tx_cmd.clone());
@@ -391,7 +391,7 @@ impl MyApp {
         let mut serial = self.serial.take().unwrap();
         let value_debug_shared = self.value_debug_shared.clone();
         let poll_interval_shared = self.poll_interval_shared.clone();
-        let ctx_clone = ctx.clone();
+        let device_shared = self.device.clone(); // Clone Arc for task
 
         tokio::spawn(async move {
             let mut poll = Poll::new().unwrap();
@@ -461,7 +461,6 @@ impl MyApp {
                                             if cmd == "*IDN?\n" {
                                                 command_queue.push_back("SYST:REM\n".to_string());
                                                 command_queue.push_back("MEAS?\n".to_string());
-                                                scpimode = ScpiMode::Meas; // Switch mode here
                                                 if debug {
                                                     println!(
                                                         "Queued SYST:REM and MEAS? after sending *IDN?, queue: {:?}",
@@ -504,35 +503,24 @@ impl MyApp {
                                                 println!("Received: {:?}", content);
                                             }
                                             if content.ends_with("\r\n") {
-                                                match scpimode {
-                                                    ScpiMode::Idn => {
-                                                        let _ = tx_data
-                                                            .send((
-                                                                Some(content.trim_end().to_owned()),
-                                                                None,
-                                                            ))
-                                                            .await;
-                                                        if debug {
-                                                            println!(
-                                                                "Sent IDN response via channel"
-                                                            );
-                                                        }
-                                                        ctx_clone.request_repaint();
-                                                        // Update UI with IDN
+                                                if scpimode == ScpiMode::Idn {
+                                                    // Directly update shared device string
+                                                    let mut device = device_shared.lock().unwrap();
+                                                    *device = content.trim_end().to_owned();
+                                                    scpimode = ScpiMode::Meas; // Switch mode here
+                                                    if debug {
+                                                        println!(
+                                                            "Updated device string: {}",
+                                                            *device
+                                                        );
                                                     }
-                                                    ScpiMode::Meas => {
-                                                        if let Ok(meas) =
-                                                            content.trim_end().parse::<f64>()
-                                                        {
-                                                            let _ = tx_data
-                                                                .send((None, Some(meas)))
-                                                                .await;
-                                                            if debug {
-                                                                println!(
-                                                                    "Sent measurement: {}",
-                                                                    meas
-                                                                );
-                                                            }
+                                                } else if scpimode == ScpiMode::Meas {
+                                                    if let Ok(meas) =
+                                                        content.trim_end().parse::<f64>()
+                                                    {
+                                                        let _ = tx_data.send(Some(meas)).await;
+                                                        if debug {
+                                                            println!("Sent measurement: {}", meas);
                                                         }
                                                     }
                                                 }
@@ -573,8 +561,6 @@ impl MyApp {
                 tokio::time::sleep(Duration::from_millis(interval)).await;
             }
         });
-
-        ctx.request_repaint();
     }
 
     fn spawn_graph_update_task(&mut self, ctx: Context) {
@@ -679,12 +665,9 @@ impl eframe::App for MyApp {
             self.is_init = true;
         }
 
-        // Process all available messages (device ID or measurements)
+        // Process all available measurements (no longer handling device ID here)
         if let Some(ref mut rx) = self.serial_rx {
-            while let Ok((device_opt, meas_opt)) = rx.try_recv() {
-                if let Some(device) = device_opt {
-                    self.device = device; // Update self.device when IDN response arrives
-                }
+            while let Ok(meas_opt) = rx.try_recv() {
                 if let Some(meas) = meas_opt {
                     self.curr_meas = meas; // Update curr_meas with new data
                 }
@@ -759,15 +742,16 @@ impl eframe::App for MyApp {
                                 .as_mut()
                                 .unwrap()
                                 .set_parity(mio_serial::Parity::None);
-                            self.spawn_serial_task(ctx.clone());
+                            self.spawn_serial_task();
                             self.spawn_graph_update_task(ctx.clone()); // Start graph update task
                         }
                     }
                 });
                 ui.horizontal(|ui| {
-                    if !self.device.is_empty() {
+                    let device = self.device.lock().unwrap();
+                    if !device.is_empty() {
                         ui.label("Connected to: ");
-                        ui.label(&self.device);
+                        ui.label(&*device);
                     } else {
                         ui.label("Not connected.");
                     }
