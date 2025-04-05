@@ -17,14 +17,11 @@ Maybe some stuff even works out of the box.
 
 **TODO:**
 
-- context aware formatting of the value display (currently goes out of bounds for e.g. large resistance values)
 - math modes
 - continuity threshold
 - beeper control
 - code refactoring for easier integration of other meters
 - make serial parameters changeable
-- only record values that have changed to the previous one
-- move from dumb 'every 10ms repaint' to a more serial event triggered update mechanism in a seperate tokio thread
 - csv record export
 
 ## How to get going

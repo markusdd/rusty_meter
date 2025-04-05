@@ -24,7 +24,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SERIAL_TOKEN: Token = Token(0);
 
-const MEM_DEPTH_DEFAULT: usize = 500;
+const MEM_DEPTH_DEFAULT: usize = 100; // Default slider value
+const MEM_DEPTH_MAX_DEFAULT: usize = 2000; // Default maximum
 
 /// A trait that must be implemented for all SCPI command structs.
 /// Gets passed the struct instance itself and the selected option name
@@ -219,9 +220,11 @@ pub struct MyApp {
     bits: u32,
     stop_bits: u32,
     parity: bool,
-    mem_depth: usize,
+    mem_depth: usize,     // Persistent, adjustable via slider
+    mem_depth_max: usize, // Persistent, maximum for slider
     connect_on_startup: bool,
     value_debug: bool,
+    poll_interval_ms: u64,
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -268,7 +271,6 @@ pub struct MyApp {
     curr_range: usize,
     #[serde(skip)]
     serial_rx: Option<Receiver<f64>>,
-    poll_interval_ms: u64,
 }
 
 impl Default for MyApp {
@@ -279,7 +281,8 @@ impl Default for MyApp {
             bits: 8,
             stop_bits: 1,
             parity: false,
-            mem_depth: MEM_DEPTH_DEFAULT,
+            mem_depth: MEM_DEPTH_DEFAULT, // Default slider value: 100
+            mem_depth_max: MEM_DEPTH_MAX_DEFAULT, // Default max: 2000
             connect_on_startup: false,
             value_debug: false,
             curr_meter: "OWON XDM1041".to_owned(),
@@ -476,10 +479,10 @@ impl eframe::App for MyApp {
             while let Ok(meas) = rx.try_recv() {
                 self.curr_meas = meas;
                 self.values.push_back(meas);
-                if self.values.len() > self.mem_depth {
+                // Trim values if exceeding mem_depth, keeping most recent
+                while self.values.len() > self.mem_depth {
                     self.values.pop_front();
                 }
-                // Repaint is now triggered by the serial task
             }
         }
 
@@ -831,10 +834,23 @@ impl eframe::App for MyApp {
                     .show_axes(true)
                     .show_grid(true)
                     .height(400.0)
-                    .include_x(self.mem_depth as f64);
+                    .include_x(self.mem_depth as f64); // Use dynamic mem_depth
                 plot.show(ui, |plot_ui| {
                     plot_ui.line(line);
                 });
+            });
+
+            ui.separator();
+
+            // New graph adjustments section
+            ui.vertical(|ui| {
+                ui.label("Graph Adjustments");
+                ui.add(
+                    egui::Slider::new(&mut self.mem_depth, 10..=self.mem_depth_max)
+                        .text("Memory Depth")
+                        .step_by(10.0) // Step by 10 for smoother control
+                        .clamp_to_range(true),
+                );
             });
 
             ui.separator();
@@ -848,7 +864,7 @@ impl eframe::App for MyApp {
                 egui::warn_if_debug_build(ui);
             });
 
-            // Settings window with polling rate adjustment
+            // Settings window with polling rate and memory depth max adjustment
             if self.settings_open {
                 Window::new("Settings")
                     .auto_sized()
@@ -894,6 +910,30 @@ impl eframe::App for MyApp {
                                 }
                             }
                             ui.label("Note: Reconnect required to apply new poll interval");
+                            ui.label("Maximum graph memory depth:");
+                            let mut max_depth_str = self.mem_depth_max.to_string();
+                            if ui
+                                .add(
+                                    TextEdit::singleline(&mut max_depth_str)
+                                        .desired_width(800.0)
+                                        .hint_text("Enter maximum number of values for graph"),
+                                )
+                                .changed()
+                            {
+                                if let Ok(new_max_depth) = max_depth_str.parse::<usize>() {
+                                    if new_max_depth >= 10 {
+                                        // Ensure minimum is at least 10
+                                        self.mem_depth_max = new_max_depth;
+                                        // Clamp mem_depth to new max if necessary
+                                        if self.mem_depth > self.mem_depth_max {
+                                            self.mem_depth = self.mem_depth_max;
+                                            while self.values.len() > self.mem_depth {
+                                                self.values.pop_front();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             if ui.button("Close").clicked() {
                                 self.settings_open = false;
                             }
