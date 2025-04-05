@@ -39,7 +39,6 @@ pub trait GenScpi {
 
 enum ScpiMode {
     Idn,
-    Conf,
     Syst,
     Meas,
 }
@@ -227,6 +226,7 @@ pub struct MyApp {
     connect_on_startup: bool,
     value_debug: bool,
     poll_interval_ms: u64,
+    beeper_enabled: bool, // New field for beeper state, persistent
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -314,6 +314,7 @@ impl Default for MyApp {
             serial_rx: None,
             serial_tx: None, // Initialize as None
             poll_interval_ms: 20,
+            beeper_enabled: true, // Default to on, per meter spec
         }
     }
 }
@@ -392,6 +393,8 @@ impl MyApp {
                             scpimode = ScpiMode::Meas;
                             issue_new_write = true; // Trigger MEAS? next
                         }
+                        // Small delay to ensure meter processes the command
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                     continue; // Prioritize handling commands
                 }
@@ -401,7 +404,6 @@ impl MyApp {
                     let sendstring = match scpimode {
                         ScpiMode::Idn => "*IDN?\n",
                         ScpiMode::Syst => "SYST:REM\n",
-                        ScpiMode::Conf => unreachable!("CONF handled via rx_cmd"),
                         ScpiMode::Meas => "MEAS?\n",
                     };
                     if let Ok(()) = serial.write_all(sendstring.as_bytes()) {
@@ -435,9 +437,6 @@ impl MyApp {
                                                     scpimode = ScpiMode::Syst;
                                                 }
                                                 ScpiMode::Syst => {
-                                                    scpimode = ScpiMode::Meas;
-                                                }
-                                                ScpiMode::Conf => {
                                                     scpimode = ScpiMode::Meas;
                                                 }
                                                 ScpiMode::Meas => {
@@ -769,6 +768,13 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:DIOD\n".to_owned();
                                 if let Some(ref tx) = self.serial_tx {
                                     let _ = tx.try_send(self.confstring.clone());
+                                    // Ensure beeper state is sent on mode switch
+                                    let beeper_cmd = if self.beeper_enabled {
+                                        "BEEP:STAT ON\n"
+                                    } else {
+                                        "BEEP:STAT OFF\n"
+                                    };
+                                    let _ = tx.try_send(beeper_cmd.to_string());
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "DIOD");
@@ -783,6 +789,13 @@ impl eframe::App for MyApp {
                                 self.confstring = "CONF:CONT\n".to_owned();
                                 if let Some(ref tx) = self.serial_tx {
                                     let _ = tx.try_send(self.confstring.clone());
+                                    // Ensure beeper state is sent on mode switch
+                                    let beeper_cmd = if self.beeper_enabled {
+                                        "BEEP:STAT ON\n"
+                                    } else {
+                                        "BEEP:STAT OFF\n"
+                                    };
+                                    let _ = tx.try_send(beeper_cmd.to_string());
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "CONT");
@@ -853,6 +866,21 @@ impl eframe::App for MyApp {
                                 }
                                 if self.value_debug {
                                     println!("Selected Range changed: {}", self.confstring);
+                                }
+                            }
+                        }
+                        // Add beeper checkbox for CONT and DIOD modes
+                        if self.metermode == MeterMode::Cont || self.metermode == MeterMode::Diod {
+                            let mut beeper = self.beeper_enabled;
+                            if ui.checkbox(&mut beeper, "Beeper").changed() {
+                                self.beeper_enabled = beeper;
+                                if let Some(ref tx) = self.serial_tx {
+                                    let cmd = if beeper {
+                                        "BEEP:STAT ON\n"
+                                    } else {
+                                        "BEEP:STAT OFF\n"
+                                    };
+                                    let _ = tx.try_send(cmd.to_string());
                                 }
                             }
                         }
