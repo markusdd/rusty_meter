@@ -227,7 +227,8 @@ pub struct MyApp {
     connect_on_startup: bool,
     value_debug: bool,
     poll_interval_ms: u64,
-    graph_update_interval_ms: u64, // New field for graph update rate
+    graph_update_interval_ms: u64, // Persistent, adjustable via slider in main GUI
+    graph_update_interval_max: u64, // Persistent, maximum for graph update interval slider
     beeper_enabled: bool,          // New field for beeper state, persistent
     cont_threshold: u32,           // Persistent continuity threshold (0-1000 ohms)
     diod_threshold: f32,           // Persistent diode threshold (0-3.0 volts)
@@ -326,13 +327,14 @@ impl Default for MyApp {
             serial_rx: None,
             serial_tx: None,
             poll_interval_ms: 20,
-            graph_update_interval_ms: 50, // Default graph update interval: 50ms
+            graph_update_interval_ms: 20, // Default to 20ms for ~50 FPS
+            graph_update_interval_max: 1000, // Default maximum of 1000ms
             beeper_enabled: true,         // Default to on, per meter spec
             cont_threshold: 50,           // Default continuity threshold: 50 ohms
             diod_threshold: 2.0,          // Default diode threshold: 2.0 volts (mid-range)
             value_debug_shared: Arc::new(Mutex::new(false)),
             poll_interval_shared: Arc::new(Mutex::new(20)),
-            graph_update_interval_shared: Arc::new(Mutex::new(50)), // Default shared value
+            graph_update_interval_shared: Arc::new(Mutex::new(20)), // Default shared value to 20ms
             last_graph_update: 0.0,                                 // Initialize to 0
         }
     }
@@ -1112,15 +1114,32 @@ impl eframe::App for MyApp {
 
             ui.separator();
 
-            // New graph adjustments section
+            // Graph adjustments section with sliders side by side
             ui.vertical(|ui| {
                 ui.label("Graph Adjustments");
-                ui.add(
-                    egui::Slider::new(&mut self.mem_depth, 10..=self.mem_depth_max)
-                        .text("Memory Depth")
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.mem_depth, 10..=self.mem_depth_max)
+                            .text("Memory Depth")
+                            .step_by(10.0) // Step by 10 for smoother control
+                            .clamping(SliderClamping::Always),
+                    );
+                    // Graph update interval slider to the right
+                    let graph_interval_slider = ui.add(
+                        egui::Slider::new(
+                            &mut self.graph_update_interval_ms,
+                            10..=self.graph_update_interval_max,
+                        )
+                        .text("Update Interval (ms)")
                         .step_by(10.0) // Step by 10 for smoother control
-                        .clamping(SliderClamping::Always), // Updated from clamp_to_range
-                );
+                        .clamping(SliderClamping::Always),
+                    );
+                    if graph_interval_slider.changed() {
+                        // Update the shared value when the slider changes
+                        *self.graph_update_interval_shared.lock().unwrap() =
+                            self.graph_update_interval_ms;
+                    }
+                });
             });
 
             ui.separator();
@@ -1187,24 +1206,6 @@ impl eframe::App for MyApp {
                                     }
                                 }
                             }
-                            ui.label("Graph update interval (ms):");
-                            let mut graph_interval_str = self.graph_update_interval_ms.to_string();
-                            if ui
-                                .add(
-                                    TextEdit::singleline(&mut graph_interval_str)
-                                        .desired_width(800.0)
-                                        .hint_text("Enter graph update interval in ms"),
-                                )
-                                .changed()
-                            {
-                                if let Ok(new_interval) = graph_interval_str.parse::<u64>() {
-                                    if new_interval > 0 {
-                                        self.graph_update_interval_ms = new_interval;
-                                        *self.graph_update_interval_shared.lock().unwrap() =
-                                            new_interval;
-                                    }
-                                }
-                            }
                             ui.label("Maximum graph memory depth:");
                             let mut max_depth_str = self.mem_depth_max.to_string();
                             if ui
@@ -1225,6 +1226,34 @@ impl eframe::App for MyApp {
                                             while self.values.len() > self.mem_depth {
                                                 self.values.pop_front();
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                            // Add maximum graph update interval setting
+                            ui.label("Maximum graph update interval (ms):");
+                            let mut max_graph_interval_str =
+                                self.graph_update_interval_max.to_string();
+                            if ui
+                                .add(
+                                    TextEdit::singleline(&mut max_graph_interval_str)
+                                        .desired_width(800.0)
+                                        .hint_text("Enter maximum graph update interval in ms"),
+                                )
+                                .changed()
+                            {
+                                if let Ok(new_max_interval) = max_graph_interval_str.parse::<u64>()
+                                {
+                                    if new_max_interval >= 10 {
+                                        self.graph_update_interval_max = new_max_interval;
+                                        // Clamp graph_update_interval_ms to new max if necessary
+                                        if self.graph_update_interval_ms
+                                            > self.graph_update_interval_max
+                                        {
+                                            self.graph_update_interval_ms =
+                                                self.graph_update_interval_max;
+                                            *self.graph_update_interval_shared.lock().unwrap() =
+                                                self.graph_update_interval_max;
                                         }
                                     }
                                 }
