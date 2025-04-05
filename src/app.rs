@@ -391,6 +391,7 @@ impl MyApp {
         let mut serial = self.serial.take().unwrap();
         let value_debug_shared = self.value_debug_shared.clone();
         let poll_interval_shared = self.poll_interval_shared.clone();
+        let ctx_clone = ctx.clone(); // Clone Context for use in the task
 
         tokio::spawn(async move {
             let mut poll = Poll::new().unwrap();
@@ -421,16 +422,12 @@ impl MyApp {
                     println!("Starting poll loop, queue: {:?}", command_queue);
                 }
 
-                // Queue new commands from UI, inserting at front for priority
+                // Queue new commands from UI
                 while let Ok(cmd) = rx_cmd.try_recv() {
                     if debug {
                         println!("Queuing command from UI: {:?}", cmd);
                     }
-                    if !cmd.ends_with("?\n") {
-                        command_queue.push_front(cmd); // Prioritize non-query commands
-                    } else {
-                        command_queue.push_back(cmd); // MEAS? goes to the back
-                    }
+                    command_queue.push_back(cmd); // Use FIFO order
                 }
 
                 // Poll for events
@@ -444,7 +441,7 @@ impl MyApp {
                         }
 
                         for event in events.iter() {
-                            // Handle writes first to ensure queue is processed
+                            // Handle writes
                             if event.is_writable() && !command_queue.is_empty() {
                                 if debug {
                                     println!("Writable event detected, queue: {:?}", command_queue);
@@ -458,18 +455,6 @@ impl MyApp {
                                             let cmd = command_queue.pop_front().unwrap();
                                             if debug {
                                                 println!("Command sent: {:?}", cmd);
-                                            }
-                                            // After *IDN? response, queue next commands
-                                            if cmd == "*IDN?\n" {
-                                                command_queue.push_front("SYST:REM\n".to_string());
-                                                scpimode = ScpiMode::Meas;
-                                                command_queue.push_front("MEAS?\n".to_string());
-                                                if debug {
-                                                    println!(
-                                                        "Queued SYST:REM and MEAS? after *IDN?, queue: {:?}",
-                                                        command_queue
-                                                    );
-                                                }
                                             }
                                         }
                                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -514,6 +499,30 @@ impl MyApp {
                                                                 None,
                                                             ))
                                                             .await;
+                                                        if debug {
+                                                            println!(
+                                                                "Sent IDN response via channel"
+                                                            );
+                                                        }
+                                                        scpimode = ScpiMode::Meas; // Switch mode after response
+                                                        command_queue
+                                                            .push_back("SYST:REM\n".to_string());
+                                                        command_queue
+                                                            .push_back("MEAS?\n".to_string());
+                                                        if debug {
+                                                            println!(
+                                                                "Queued SYST:REM and MEAS? after IDN response, queue: {:?}",
+                                                                command_queue
+                                                            );
+                                                        }
+                                                        ctx_clone.request_repaint(); // Trigger repaint for IDN update
+                                                                                     // Nudge the serial port to ensure writable events
+                                                        let _ = serial.write_all(b"\n"); // Small write to keep port active
+                                                        if debug {
+                                                            println!(
+                                                                "Sent newline to nudge serial port"
+                                                            );
+                                                        }
                                                     }
                                                     ScpiMode::Meas => {
                                                         if let Ok(meas) =

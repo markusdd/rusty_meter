@@ -62,16 +62,28 @@ pub fn format_measurement(
                 .to_string();
             }
         }
-        MeterMode::Res => {
+        MeterMode::Res | MeterMode::Cont => {
             if abs_value >= 1_000_000.0 {
                 display_value = value / 1_000_000.0;
                 display_unit = "MOhm".to_string();
             } else if abs_value >= 1_000.0 {
                 display_value = value / 1_000.0;
                 display_unit = "kOhm".to_string();
-            } else if abs_value < 1.0 {
+            } else if abs_value < 1.0 && abs_value > 0.0 {
                 display_value = value * 1000.0;
                 display_unit = "mOhm".to_string();
+            }
+        }
+        MeterMode::Cap => {
+            if abs_value >= 0.001 {
+                display_value = value * 1000.0;
+                display_unit = "mF".to_string();
+            } else if abs_value >= 0.000_001 {
+                display_value = value * 1_000_000.0;
+                display_unit = "μF".to_string();
+            } else if abs_value > 0.0 {
+                display_value = value * 1_000_000_000.0;
+                display_unit = "nF".to_string();
             }
         }
         MeterMode::Per => {
