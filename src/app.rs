@@ -387,14 +387,32 @@ impl MyApp {
             loop {
                 // Check for UI commands first
                 if let Ok(cmd) = rx_cmd.try_recv() {
-                    if let Ok(()) = serial.write_all(cmd.as_bytes()) {
-                        // If it's a configuration command, switch to Meas mode after sending
-                        if cmd.starts_with("CONF:") {
-                            scpimode = ScpiMode::Meas;
-                            issue_new_write = true; // Trigger MEAS? next
+                    if value_debug {
+                        println!("Sending: {:?}", cmd);
+                    }
+                    match serial.write_all(cmd.as_bytes()) {
+                        Ok(()) => {
+                            // If it's a configuration command, switch to Meas mode after sending
+                            if cmd.starts_with("CONF:") {
+                                scpimode = ScpiMode::Meas;
+                                issue_new_write = true; // Trigger MEAS? next
+                            }
+                            // Delay to ensure meter processes the command
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            // Query beeper state if it's a BEEP command
+                            if cmd.starts_with("SYST:BEEP:STATe") {
+                                if let Ok(()) = serial.write_all("SYST:BEEP:STATe?\n".as_bytes()) {
+                                    if value_debug {
+                                        println!("Sending: \"SYST:BEEP:STATe?\\n\"");
+                                    }
+                                }
+                            }
                         }
-                        // Small delay to ensure meter processes the command
-                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        Err(e) => {
+                            if value_debug {
+                                println!("Failed to send command {:?}: {}", cmd, e);
+                            }
+                        }
                     }
                     continue; // Prioritize handling commands
                 }
@@ -406,6 +424,9 @@ impl MyApp {
                         ScpiMode::Syst => "SYST:REM\n",
                         ScpiMode::Meas => "MEAS?\n",
                     };
+                    if value_debug {
+                        println!("Sending: {:?}", sendstring);
+                    }
                     if let Ok(()) = serial.write_all(sendstring.as_bytes()) {
                         match scpimode {
                             ScpiMode::Syst => {
@@ -425,7 +446,7 @@ impl MyApp {
                                     Ok(count) => {
                                         let content = String::from_utf8_lossy(&readbuf[..count]);
                                         if value_debug {
-                                            println!("{:?}", content);
+                                            println!("Received: {:?}", content);
                                         }
                                         if content.ends_with("\r\n") {
                                             issue_new_write = true;
@@ -650,8 +671,13 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Vdc;
                                 self.curr_unit = "VDC".to_owned();
                                 self.confstring = "CONF:VOLT:DC AUTO\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "VDC");
@@ -664,8 +690,13 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Vac;
                                 self.curr_unit = "VAC".to_owned();
                                 self.confstring = "CONF:VOLT:AC AUTO\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "VAC");
@@ -678,8 +709,13 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Adc;
                                 self.curr_unit = "ADC".to_owned();
                                 self.confstring = "CONF:CURR:DC AUTO\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "ADC");
@@ -692,8 +728,13 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Aac;
                                 self.curr_unit = "AAC".to_owned();
                                 self.confstring = "CONF:CURR:AC AUTO\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "AAC");
@@ -708,8 +749,13 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Res;
                                 self.curr_unit = "Ohm".to_owned();
                                 self.confstring = "CONF:RES AUTO\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "RES");
@@ -722,8 +768,13 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Cap;
                                 self.curr_unit = "F".to_owned();
                                 self.confstring = "CONF:CAP AUTO\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "CAP");
@@ -736,8 +787,13 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Freq;
                                 self.curr_unit = "Hz".to_owned();
                                 self.confstring = "CONF:FREQ\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "FREQ");
@@ -750,8 +806,13 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Per;
                                 self.curr_unit = "s".to_owned();
                                 self.confstring = "CONF:PER\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "PER");
@@ -766,15 +827,27 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Diod;
                                 self.curr_unit = "V".to_owned();
                                 self.confstring = "CONF:DIOD\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
-                                    // Ensure beeper state is sent on mode switch
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let mode_cmd = self.confstring.clone();
                                     let beeper_cmd = if self.beeper_enabled {
-                                        "BEEP:STAT ON\n"
+                                        "SYST:BEEP:STATe ON\n".to_string()
                                     } else {
-                                        "BEEP:STAT OFF\n"
+                                        "SYST:BEEP:STATe OFF\n".to_string()
                                     };
-                                    let _ = tx.try_send(beeper_cmd.to_string());
+                                    let value_debug = self.value_debug;
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(mode_cmd).await {
+                                            if value_debug {
+                                                println!("Failed to queue mode command: {}", e);
+                                            }
+                                        }
+                                        tokio::time::sleep(Duration::from_millis(500)).await; // Ensure mode settles
+                                        if let Err(e) = tx.send(beeper_cmd).await {
+                                            if value_debug {
+                                                println!("Failed to queue beeper command: {}", e);
+                                            }
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "DIOD");
@@ -787,15 +860,27 @@ impl eframe::App for MyApp {
                                 self.metermode = MeterMode::Cont;
                                 self.curr_unit = "Ohm".to_owned();
                                 self.confstring = "CONF:CONT\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
-                                    // Ensure beeper state is sent on mode switch
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let mode_cmd = self.confstring.clone();
                                     let beeper_cmd = if self.beeper_enabled {
-                                        "BEEP:STAT ON\n"
+                                        "SYST:BEEP:STATe ON\n".to_string()
                                     } else {
-                                        "BEEP:STAT OFF\n"
+                                        "SYST:BEEP:STATe OFF\n".to_string()
                                     };
-                                    let _ = tx.try_send(beeper_cmd.to_string());
+                                    let value_debug = self.value_debug;
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(mode_cmd).await {
+                                            if value_debug {
+                                                println!("Failed to queue mode command: {}", e);
+                                            }
+                                        }
+                                        tokio::time::sleep(Duration::from_millis(500)).await; // Ensure mode settles
+                                        if let Err(e) = tx.send(beeper_cmd).await {
+                                            if value_debug {
+                                                println!("Failed to queue beeper command: {}", e);
+                                            }
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "CONT");
@@ -807,10 +892,14 @@ impl eframe::App for MyApp {
                             if ui.add(temp_btn).clicked() {
                                 self.metermode = MeterMode::Temp;
                                 self.curr_unit = "°C".to_owned();
-                                // TODO temp mode needs more selections like sensor typ, unit etc.
                                 self.confstring = "CONF:TEMP:RTD PT100\n".to_owned();
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 self.values = VecDeque::with_capacity(self.mem_depth);
                                 self.rangecmd = RangeCmd::new(&self.curr_meter, "TEMP");
@@ -844,8 +933,13 @@ impl eframe::App for MyApp {
                             self.confstring = self
                                 .ratecmd
                                 .gen_scpi(self.ratecmd.opts.index(self.curr_rate).unwrap().0);
-                            if let Some(ref tx) = self.serial_tx {
-                                let _ = tx.try_send(self.confstring.clone());
+                            if let Some(tx) = self.serial_tx.clone() {
+                                let cmd = self.confstring.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = tx.send(cmd).await {
+                                        println!("Failed to queue command: {}", e);
+                                    }
+                                });
                             }
                             if self.value_debug {
                                 println!("Selected Rate changed: {}", self.confstring);
@@ -861,8 +955,13 @@ impl eframe::App for MyApp {
                             if rangebox.changed() {
                                 self.confstring = rangecmd
                                     .gen_scpi(rangecmd.opts.index(self.curr_range).unwrap().0);
-                                if let Some(ref tx) = self.serial_tx {
-                                    let _ = tx.try_send(self.confstring.clone());
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = self.confstring.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            println!("Failed to queue command: {}", e);
+                                        }
+                                    });
                                 }
                                 if self.value_debug {
                                     println!("Selected Range changed: {}", self.confstring);
@@ -874,13 +973,20 @@ impl eframe::App for MyApp {
                             let mut beeper = self.beeper_enabled;
                             if ui.checkbox(&mut beeper, "Beeper").changed() {
                                 self.beeper_enabled = beeper;
-                                if let Some(ref tx) = self.serial_tx {
+                                if let Some(tx) = self.serial_tx.clone() {
                                     let cmd = if beeper {
-                                        "BEEP:STAT ON\n"
+                                        "SYST:BEEP:STATe ON\n".to_string()
                                     } else {
-                                        "BEEP:STAT OFF\n"
+                                        "SYST:BEEP:STATe OFF\n".to_string()
                                     };
-                                    let _ = tx.try_send(cmd.to_string());
+                                    let value_debug = self.value_debug;
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            if value_debug {
+                                                println!("Failed to queue beeper command: {}", e);
+                                            }
+                                        }
+                                    });
                                 }
                             }
                         }
