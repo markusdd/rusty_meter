@@ -226,7 +226,8 @@ pub struct MyApp {
     connect_on_startup: bool,
     value_debug: bool,
     poll_interval_ms: u64,
-    beeper_enabled: bool, // New field for beeper state, persistent
+    beeper_enabled: bool, // Persistent beeper state
+    cont_threshold: u32,  // Persistent continuity threshold (0-1000 ohms)
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -315,6 +316,7 @@ impl Default for MyApp {
             serial_tx: None, // Initialize as None
             poll_interval_ms: 20,
             beeper_enabled: true, // Default to on, per meter spec
+            cont_threshold: 50,   // Default threshold: 50 ohms (reasonable starting point)
         }
     }
 }
@@ -497,12 +499,14 @@ impl MyApp {
         if let Some(tx) = self.serial_tx.clone() {
             let mode_cmd = self.confstring.clone();
             let value_debug = self.value_debug;
+            let threshold = self.cont_threshold;
             if let Some(beep) = beeper_enabled {
                 let beeper_cmd = if beep {
                     "SYST:BEEP:STATe ON\n".to_string()
                 } else {
                     "SYST:BEEP:STATe OFF\n".to_string()
                 };
+                let threshold_cmd = format!("CONT:THREshold {}\n", threshold);
                 tokio::spawn(async move {
                     if let Err(e) = tx.send(mode_cmd).await {
                         if value_debug {
@@ -513,6 +517,12 @@ impl MyApp {
                     if let Err(e) = tx.send(beeper_cmd).await {
                         if value_debug {
                             println!("Failed to queue beeper command: {}", e);
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await; // Ensure beeper settles
+                    if let Err(e) = tx.send(threshold_cmd).await {
+                        if value_debug {
+                            println!("Failed to queue threshold command: {}", e);
                         }
                     }
                 });
@@ -897,7 +907,7 @@ impl eframe::App for MyApp {
                                 }
                             }
                         }
-                        // Add beeper checkbox for CONT and DIOD modes
+                        // Add beeper controls for CONT and DIOD modes
                         if self.metermode == MeterMode::Cont || self.metermode == MeterMode::Diod {
                             let mut beeper = self.beeper_enabled;
                             if ui.checkbox(&mut beeper, "Beeper").changed() {
@@ -913,6 +923,30 @@ impl eframe::App for MyApp {
                                         if let Err(e) = tx.send(cmd).await {
                                             if value_debug {
                                                 println!("Failed to queue beeper command: {}", e);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+
+                            // Continuity threshold slider
+                            let threshold_slider = ui.add(
+                                egui::Slider::new(&mut self.cont_threshold, 0..=1000)
+                                    .text("Threshold (Ω)")
+                                    .step_by(1.0)
+                                    .clamping(SliderClamping::Always),
+                            );
+                            if threshold_slider.changed() {
+                                if let Some(tx) = self.serial_tx.clone() {
+                                    let cmd = format!("CONT:THREshold {}\n", self.cont_threshold);
+                                    let value_debug = self.value_debug;
+                                    tokio::spawn(async move {
+                                        if let Err(e) = tx.send(cmd).await {
+                                            if value_debug {
+                                                println!(
+                                                    "Failed to queue threshold command: {}",
+                                                    e
+                                                );
                                             }
                                         }
                                     });
