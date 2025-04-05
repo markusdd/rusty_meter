@@ -569,7 +569,7 @@ impl eframe::App for MyApp {
                     outer_margin: 24.0.into(),
                     corner_radius: 5.0.into(),
                     shadow: epaint::Shadow {
-                        offset: [8, 12].into(),
+                        offset: [8, 12],
                         blur: 16,
                         spread: 0,
                         color: egui::Color32::from_black_alpha(180),
@@ -583,13 +583,14 @@ impl eframe::App for MyApp {
                         Vec2 { x: 400.0, y: 300.0 },
                         egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
                         |ui| {
-                            let formatted_value = format_measurement(
+                            let (formatted_value, display_unit) = format_measurement(
                                 self.curr_meas,
                                 10,
                                 1_000_000.0,
-                                0.001,
-                                &self.metermode, // Pass the current meter mode
+                                0.0001,
+                                &self.metermode,
                             );
+
                             ui.label(
                                 egui::RichText::new(formatted_value)
                                     .color(egui::Color32::YELLOW)
@@ -599,7 +600,7 @@ impl eframe::App for MyApp {
                                     }),
                             );
                             ui.label(
-                                egui::RichText::new(format!("{:>10}", self.curr_unit))
+                                egui::RichText::new(format!("{:>10}", display_unit))
                                     .color(egui::Color32::YELLOW)
                                     .font(FontId {
                                         size: 20.0,
@@ -614,7 +615,7 @@ impl eframe::App for MyApp {
                     outer_margin: 24.0.into(),
                     corner_radius: 5.0.into(),
                     shadow: epaint::Shadow {
-                        offset: [8, 12].into(),
+                        offset: [8, 12],
                         blur: 16,
                         spread: 0,
                         color: egui::Color32::from_black_alpha(180),
@@ -782,7 +783,7 @@ impl eframe::App for MyApp {
                     outer_margin: 24.0.into(),
                     corner_radius: 5.0.into(),
                     shadow: epaint::Shadow {
-                        offset: [8, 12].into(),
+                        offset: [8, 12],
                         blur: 16,
                         spread: 0,
                         color: egui::Color32::from_black_alpha(180),
