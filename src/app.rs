@@ -378,7 +378,7 @@ impl MyApp {
         app
     }
 
-    fn spawn_serial_task(&mut self, ctx: Context) {
+    fn spawn_serial_task(&mut self) {
         if self.serial.is_none() {
             return;
         }
@@ -718,7 +718,7 @@ impl eframe::App for MyApp {
                                 .as_mut()
                                 .unwrap()
                                 .set_parity(mio_serial::Parity::None);
-                            self.spawn_serial_task(ctx.clone());
+                            self.spawn_serial_task();
                             self.spawn_graph_update_task(ctx.clone()); // Start graph update task
                         }
                     }
