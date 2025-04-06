@@ -1203,9 +1203,18 @@ impl eframe::App for MyApp {
                     .y_axis_min_width(4.0)
                     .show_axes(true)
                     .show_grid(true)
-                    .height(400.0)
-                    .include_x(self.mem_depth as f64); // Use dynamic mem_depth
+                    .height(400.0);
                 plot.show(ui, |plot_ui| {
+                    // Get current bounds to base our adjustments on
+                    let current_bounds = plot_ui.plot_bounds();
+                    // Set exact x-axis bounds from 0 to mem_depth, y bounds as placeholder
+                    let new_bounds = egui_plot::PlotBounds::from_min_max(
+                        [0.0, current_bounds.min()[1]], // x_min, y_min (will be overridden by y-autoscaling)
+                        [self.mem_depth as f64, current_bounds.max()[1]], // x_max, y_max (will be overridden by y-autoscaling)
+                    );
+                    plot_ui.set_plot_bounds(new_bounds);
+                    // Disable x-axis autoscaling, enable y-axis autoscaling
+                    plot_ui.set_auto_bounds([false, true]);
                     plot_ui.line(line);
                 });
             });
