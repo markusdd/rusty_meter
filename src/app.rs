@@ -440,11 +440,16 @@ impl MyApp {
             loop {
                 tokio::select! {
                     _ = &mut shutdown_rx, if !shutting_down => {
-                        // Shutdown signal received, stop queuing MEAS? but keep processing UI commands
+                        // Shutdown signal received, queue shutdown commands and stop MEAS? polling
                         if *value_debug_shared.lock().unwrap() {
                             println!("Shutdown signal received, processing remaining queue: {:?}", command_queue);
                         }
                         shutting_down = true;
+                        command_queue.push_back("SYST:LOC\n".to_string());
+                        command_queue.push_back("*RST\n".to_string());
+                        if *value_debug_shared.lock().unwrap() {
+                            println!("Queued SYST:LOC and *RST for shutdown, queue: {:?}", command_queue);
+                        }
                     }
                     _ = async {
                         let debug = *value_debug_shared.lock().unwrap();
@@ -697,24 +702,6 @@ impl MyApp {
 
     // Method to handle disconnection
     fn disconnect(&mut self) {
-        if let Some(ref tx) = self.serial_tx {
-            // Queue SYST:LOC to exit remote mode
-            if let Err(e) = tx.try_send("SYST:LOC\n".to_string()) {
-                if self.value_debug {
-                    println!("Failed to queue SYST:LOC: {}", e);
-                }
-            } else if self.value_debug {
-                println!("SYST:LOC queued");
-            }
-            // Queue *RST to reset the meter
-            if let Err(e) = tx.try_send("*RST\n".to_string()) {
-                if self.value_debug {
-                    println!("Failed to queue *RST: {}", e);
-                }
-            } else if self.value_debug {
-                println!("*RST queued");
-            }
-        }
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(()); // Signal the serial task to shut down
         }
