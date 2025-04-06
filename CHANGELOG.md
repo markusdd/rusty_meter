@@ -1,3 +1,7 @@
+# 0.2.1
+
+- ensure proper graph axis bounds
+
 # 0.2.0
 
 - bump dependencies
