@@ -27,6 +27,17 @@ Maybe some stuff even works out of the box.
 You can clone this repository and just run `cargo build --release`, provided you have rust installed (use `rustup`, it's easy).
 The Releases section has automatically built releases for Mac ARM64 and x86_64, Windows x86_64 and Linux x86_64.
 
+### IMPORTANT for Windows
+
+For Windows, if you do not have it from another application, you might need to install the ch340 serial driver.
+(Owon has it in their application installer package, it can also be found directly on the WCH manufacturer webpage)
+
+### IMPORTANT for Mac/Linux
+
+Mac and Linux ship the driver per default. On Linux, you might need to configure udev-rules or make sure you are
+in the proper serial user group to access serial devices. (google for your distribution what the proper group is)
+Mac might require you to explicitly trust the application/binary in the system settings.
+
 ## What this is NOT
 
 Technically, a multimeter is not an oscilloscope. So even though you get a nice time-graph of your measurements,
