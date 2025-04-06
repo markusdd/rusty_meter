@@ -1,4 +1,4 @@
-# 0.1.3
+# 0.2.0
 
 - bump dependencies
 - make serial comms async
@@ -6,3 +6,5 @@
 - make graph memory depth adjustable
 - beeper control
 - continuity threshold setting
+- connect/disconnect capability without restart
+- 

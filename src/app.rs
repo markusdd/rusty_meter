@@ -419,6 +419,8 @@ impl MyApp {
             let mut readbuf = [0u8; 1024];
             let mut scpimode = ScpiMode::Idn;
             let mut command_queue: VecDeque<String> = VecDeque::new();
+            let mut shutting_down = false;
+            let mut drop_serial = false; // Flag to indicate when to drop serial
 
             // Register serial port for readable and writable events
             poll.registry()
@@ -437,14 +439,12 @@ impl MyApp {
 
             loop {
                 tokio::select! {
-                    _ = &mut shutdown_rx => {
-                        // Shutdown signal received, clean up and exit
+                    _ = &mut shutdown_rx, if !shutting_down => {
+                        // Shutdown signal received, stop queuing MEAS? but keep processing UI commands
                         if *value_debug_shared.lock().unwrap() {
-                            println!("Shutdown signal received, cleaning up serial task");
+                            println!("Shutdown signal received, processing remaining queue: {:?}", command_queue);
                         }
-                        let _ = poll.registry().deregister(&mut serial);
-                        drop(serial); // Explicitly drop the serial port
-                        break;
+                        shutting_down = true;
                     }
                     _ = async {
                         let debug = *value_debug_shared.lock().unwrap();
@@ -454,7 +454,7 @@ impl MyApp {
                             println!("Starting poll loop, queue: {:?}", command_queue);
                         }
 
-                        // Queue new commands from UI
+                        // Queue new commands from UI (always, even during shutdown)
                         while let Ok(cmd) = rx_cmd.try_recv() {
                             if debug {
                                 println!("Queuing command from UI: {:?}", cmd);
@@ -489,7 +489,7 @@ impl MyApp {
                                                         println!("Command sent: {:?}", cmd);
                                                     }
                                                     // Queue SYST:REM and MEAS? after sending *IDN?
-                                                    if cmd == "*IDN?\n" {
+                                                    if cmd == "*IDN?\n" && !shutting_down {
                                                         command_queue.push_back("SYST:REM\n".to_string());
                                                         command_queue.push_back("MEAS?\n".to_string());
                                                         if debug {
@@ -498,6 +498,13 @@ impl MyApp {
                                                                 command_queue
                                                             );
                                                         }
+                                                    }
+                                                    // Set flag to drop serial after *RST is sent during shutdown
+                                                    if shutting_down && cmd == "*RST\n" {
+                                                        if debug {
+                                                            println!("*RST sent, marking serial for shutdown");
+                                                        }
+                                                        drop_serial = true;
                                                     }
                                                 }
                                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -535,10 +542,9 @@ impl MyApp {
                                                     }
                                                     if content.ends_with("\r\n") {
                                                         if scpimode == ScpiMode::Idn {
-                                                            // Directly update shared device string
                                                             let mut device = device_shared.lock().unwrap();
                                                             *device = content.trim_end().to_owned();
-                                                            scpimode = ScpiMode::Meas; // Switch mode here
+                                                            scpimode = ScpiMode::Meas;
                                                             if debug {
                                                                 println!(
                                                                     "Updated device string: {}",
@@ -581,8 +587,8 @@ impl MyApp {
                             }
                         }
 
-                        // Queue MEAS? for continuous polling in Meas mode if queue is empty
-                        if scpimode == ScpiMode::Meas && command_queue.is_empty() {
+                        // Queue MEAS? for continuous polling in Meas mode if queue is empty, only if not shutting down
+                        if !shutting_down && scpimode == ScpiMode::Meas && command_queue.is_empty() {
                             command_queue.push_back("MEAS?\n".to_string());
                             if debug {
                                 println!("Queued MEAS? for polling, queue: {:?}", command_queue);
@@ -592,7 +598,19 @@ impl MyApp {
                         tokio::time::sleep(Duration::from_millis(interval)).await;
                     } => {}
                 }
+
+                // Exit the loop if we're shutting down and serial should be dropped
+                if shutting_down && drop_serial {
+                    break;
+                }
             }
+
+            // Cleanup after exiting the loop
+            if *value_debug_shared.lock().unwrap() {
+                println!("Cleaning up serial task");
+            }
+            let _ = poll.registry().deregister(&mut serial);
+            drop(serial); // Explicitly drop the serial port
         });
     }
 
@@ -677,10 +695,25 @@ impl MyApp {
         self.curr_range = 0;
     }
 
-    // Updated method to handle disconnection
+    // Method to handle disconnection
     fn disconnect(&mut self) {
-        if let Some(ref mut tx) = self.serial_tx {
-            let _ = tx.try_send("*RST\n".to_string()); // Reset meter before disconnecting
+        if let Some(ref tx) = self.serial_tx {
+            // Queue SYST:LOC to exit remote mode
+            if let Err(e) = tx.try_send("SYST:LOC\n".to_string()) {
+                if self.value_debug {
+                    println!("Failed to queue SYST:LOC: {}", e);
+                }
+            } else if self.value_debug {
+                println!("SYST:LOC queued");
+            }
+            // Queue *RST to reset the meter
+            if let Err(e) = tx.try_send("*RST\n".to_string()) {
+                if self.value_debug {
+                    println!("Failed to queue *RST: {}", e);
+                }
+            } else if self.value_debug {
+                println!("*RST queued");
+            }
         }
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(()); // Signal the serial task to shut down
