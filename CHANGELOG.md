@@ -7,4 +7,4 @@
 - beeper control
 - continuity threshold setting
 - connect/disconnect capability without restart
-- 
+- set graph refresh speed seperate from serial polling speed
