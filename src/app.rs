@@ -16,8 +16,7 @@ use mio_serial::{SerialPortBuilderExt, SerialStream};
 use phf::{phf_ordered_map, OrderedMap};
 use std::io;
 use tempfile::{Builder, TempDir};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::{mpsc, oneshot};
 
 mod helpers;
 use helpers::format_measurement;
@@ -45,7 +44,7 @@ enum ScpiMode {
 }
 
 #[derive(PartialEq, Clone, Copy)]
-enum MeterMode {
+pub enum MeterMode {
     Vdc,
     Vac,
     Adc,
@@ -277,9 +276,11 @@ pub struct MyApp {
     #[serde(skip)]
     curr_range: usize,
     #[serde(skip)]
-    serial_rx: Option<Receiver<Option<f64>>>, // handle measurements
+    serial_rx: Option<mpsc::Receiver<Option<f64>>>, // handle measurements
     #[serde(skip)]
-    serial_tx: Option<Sender<String>>, // channel for sending commands to serial task
+    serial_tx: Option<mpsc::Sender<String>>, // channel for sending commands to serial task
+    #[serde(skip)]
+    shutdown_tx: Option<oneshot::Sender<()>>, // Signal to shutdown serial task
     #[serde(skip)]
     value_debug_shared: Arc<Mutex<bool>>, // Shared debug flag for live updates
     #[serde(skip)]
@@ -288,6 +289,18 @@ pub struct MyApp {
     graph_update_interval_shared: Arc<Mutex<u64>>, // Shared graph update interval
     #[serde(skip)]
     last_graph_update: f64, // Track last graph update time
+    #[serde(skip)]
+    connection_state: ConnectionState, // New field to track connection status
+    #[serde(skip)]
+    connection_error: Option<String>, // New field to store connection error message
+}
+
+// Enum to track connection state
+#[derive(PartialEq)]
+enum ConnectionState {
+    Disconnected,
+    Connecting,
+    Connected,
 }
 
 impl Default for MyApp {
@@ -326,6 +339,7 @@ impl Default for MyApp {
             curr_range: 0,
             serial_rx: None,
             serial_tx: None,
+            shutdown_tx: None, // Initially no shutdown signal
             poll_interval_ms: 20,
             graph_update_interval_ms: 20, // Default to 20ms for ~50 FPS
             graph_update_interval_max: 1000, // Default maximum of 1000ms
@@ -336,6 +350,8 @@ impl Default for MyApp {
             poll_interval_shared: Arc::new(Mutex::new(20)),
             graph_update_interval_shared: Arc::new(Mutex::new(20)), // Default shared value to 20ms
             last_graph_update: 0.0,                                 // Initialize to 0
+            connection_state: ConnectionState::Disconnected,        // Initially disconnected
+            connection_error: None,                                 // No error initially
         }
     }
 }
@@ -387,8 +403,10 @@ impl MyApp {
 
         let (tx_data, rx_data) = mpsc::channel::<Option<f64>>(100); // Channel for measurements only
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // Channel for commands
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>(); // Shutdown signal
         self.serial_rx = Some(rx_data);
         self.serial_tx = Some(tx_cmd.clone());
+        self.shutdown_tx = Some(shutdown_tx);
 
         let mut serial = self.serial.take().unwrap();
         let value_debug_shared = self.value_debug_shared.clone();
@@ -418,149 +436,162 @@ impl MyApp {
             command_queue.push_back("*IDN?\n".to_string());
 
             loop {
-                let debug = *value_debug_shared.lock().unwrap();
-                let interval = *poll_interval_shared.lock().unwrap();
-
-                if debug {
-                    println!("Starting poll loop, queue: {:?}", command_queue);
-                }
-
-                // Queue new commands from UI
-                while let Ok(cmd) = rx_cmd.try_recv() {
-                    if debug {
-                        println!("Queuing command from UI: {:?}", cmd);
+                tokio::select! {
+                    _ = &mut shutdown_rx => {
+                        // Shutdown signal received, clean up and exit
+                        if *value_debug_shared.lock().unwrap() {
+                            println!("Shutdown signal received, cleaning up serial task");
+                        }
+                        let _ = poll.registry().deregister(&mut serial);
+                        drop(serial); // Explicitly drop the serial port
+                        break;
                     }
-                    command_queue.push_back(cmd);
-                }
+                    _ = async {
+                        let debug = *value_debug_shared.lock().unwrap();
+                        let interval = *poll_interval_shared.lock().unwrap();
 
-                // Poll for readable or writable events
-                match poll.poll(&mut events, Some(Duration::from_millis(interval))) {
-                    Ok(()) => {
                         if debug {
-                            println!(
-                                "Poll returned events: {:?}",
-                                events.iter().collect::<Vec<_>>()
-                            );
+                            println!("Starting poll loop, queue: {:?}", command_queue);
                         }
 
-                        for event in events.iter() {
-                            // Handle writes
-                            if event.is_writable() && !command_queue.is_empty() {
-                                if debug {
-                                    println!("Writable event detected, queue: {:?}", command_queue);
-                                }
-                                if let Some(cmd) = command_queue.front() {
-                                    if debug {
-                                        println!("Sending: {:?}", cmd);
-                                    }
-                                    match serial.write_all(cmd.as_bytes()) {
-                                        Ok(()) => {
-                                            let cmd = command_queue.pop_front().unwrap();
-                                            if debug {
-                                                println!("Command sent: {:?}", cmd);
-                                            }
-                                            // Queue SYST:REM and MEAS? after sending *IDN?
-                                            if cmd == "*IDN?\n" {
-                                                command_queue.push_back("SYST:REM\n".to_string());
-                                                command_queue.push_back("MEAS?\n".to_string());
-                                                if debug {
-                                                    println!(
-                                                        "Queued SYST:REM and MEAS? after sending *IDN?, queue: {:?}",
-                                                        command_queue
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                            if debug {
-                                                println!(
-                                                    "Serial write would block for {:?}, waiting",
-                                                    cmd
-                                                );
-                                            }
-                                            break;
-                                        }
-                                        Err(e) => {
-                                            if debug {
-                                                println!("Failed to send command {:?}: {}", cmd, e);
-                                            }
-                                            command_queue.pop_front();
-                                            break;
-                                        }
-                                    }
-                                }
+                        // Queue new commands from UI
+                        while let Ok(cmd) = rx_cmd.try_recv() {
+                            if debug {
+                                println!("Queuing command from UI: {:?}", cmd);
                             }
+                            command_queue.push_back(cmd);
+                        }
 
-                            // Handle reads
-                            if event.is_readable() {
+                        // Poll for readable or writable events
+                        match poll.poll(&mut events, Some(Duration::from_millis(interval))) {
+                            Ok(()) => {
                                 if debug {
-                                    println!("Readable event detected");
+                                    println!(
+                                        "Poll returned events: {:?}",
+                                        events.iter().collect::<Vec<_>>()
+                                    );
                                 }
-                                loop {
-                                    match serial.read(&mut readbuf) {
-                                        Ok(count) => {
-                                            let content =
-                                                String::from_utf8_lossy(&readbuf[..count]);
+
+                                for event in events.iter() {
+                                    // Handle writes
+                                    if event.is_writable() && !command_queue.is_empty() {
+                                        if debug {
+                                            println!("Writable event detected, queue: {:?}", command_queue);
+                                        }
+                                        if let Some(cmd) = command_queue.front() {
                                             if debug {
-                                                println!("Received: {:?}", content);
+                                                println!("Sending: {:?}", cmd);
                                             }
-                                            if content.ends_with("\r\n") {
-                                                if scpimode == ScpiMode::Idn {
-                                                    // Directly update shared device string
-                                                    let mut device = device_shared.lock().unwrap();
-                                                    *device = content.trim_end().to_owned();
-                                                    scpimode = ScpiMode::Meas; // Switch mode here
+                                            match serial.write_all(cmd.as_bytes()) {
+                                                Ok(()) => {
+                                                    let cmd = command_queue.pop_front().unwrap();
                                                     if debug {
-                                                        println!(
-                                                            "Updated device string: {}",
-                                                            *device
-                                                        );
+                                                        println!("Command sent: {:?}", cmd);
                                                     }
-                                                } else if scpimode == ScpiMode::Meas {
-                                                    if let Ok(meas) =
-                                                        content.trim_end().parse::<f64>()
-                                                    {
-                                                        let _ = tx_data.send(Some(meas)).await;
+                                                    // Queue SYST:REM and MEAS? after sending *IDN?
+                                                    if cmd == "*IDN?\n" {
+                                                        command_queue.push_back("SYST:REM\n".to_string());
+                                                        command_queue.push_back("MEAS?\n".to_string());
                                                         if debug {
-                                                            println!("Sent measurement: {}", meas);
+                                                            println!(
+                                                                "Queued SYST:REM and MEAS? after sending *IDN?, queue: {:?}",
+                                                                command_queue
+                                                            );
                                                         }
                                                     }
                                                 }
+                                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                                    if debug {
+                                                        println!(
+                                                            "Serial write would block for {:?}, waiting",
+                                                            cmd
+                                                        );
+                                                    }
+                                                    break;
+                                                }
+                                                Err(e) => {
+                                                    if debug {
+                                                        println!("Failed to send command {:?}: {}", cmd, e);
+                                                    }
+                                                    command_queue.pop_front();
+                                                    break;
+                                                }
                                             }
                                         }
-                                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                            if debug {
-                                                println!("Read would block, exiting read loop");
-                                            }
-                                            break;
+                                    }
+
+                                    // Handle reads
+                                    if event.is_readable() {
+                                        if debug {
+                                            println!("Readable event detected");
                                         }
-                                        Err(e) => {
-                                            if debug {
-                                                println!("Serial read error: {}", e);
+                                        loop {
+                                            match serial.read(&mut readbuf) {
+                                                Ok(count) => {
+                                                    let content =
+                                                        String::from_utf8_lossy(&readbuf[..count]);
+                                                    if debug {
+                                                        println!("Received: {:?}", content);
+                                                    }
+                                                    if content.ends_with("\r\n") {
+                                                        if scpimode == ScpiMode::Idn {
+                                                            // Directly update shared device string
+                                                            let mut device = device_shared.lock().unwrap();
+                                                            *device = content.trim_end().to_owned();
+                                                            scpimode = ScpiMode::Meas; // Switch mode here
+                                                            if debug {
+                                                                println!(
+                                                                    "Updated device string: {}",
+                                                                    *device
+                                                                );
+                                                            }
+                                                        } else if scpimode == ScpiMode::Meas {
+                                                            if let Ok(meas) =
+                                                                content.trim_end().parse::<f64>()
+                                                            {
+                                                                let _ = tx_data.send(Some(meas)).await;
+                                                                if debug {
+                                                                    println!("Sent measurement: {}", meas);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                                    if debug {
+                                                        println!("Read would block, exiting read loop");
+                                                    }
+                                                    break;
+                                                }
+                                                Err(e) => {
+                                                    if debug {
+                                                        println!("Serial read error: {}", e);
+                                                    }
+                                                    break;
+                                                }
                                             }
-                                            break;
                                         }
                                     }
                                 }
                             }
+                            Err(e) => {
+                                if debug {
+                                    println!("Poll error: {}", e);
+                                }
+                            }
                         }
-                    }
-                    Err(e) => {
-                        if debug {
-                            println!("Poll error: {}", e);
+
+                        // Queue MEAS? for continuous polling in Meas mode if queue is empty
+                        if scpimode == ScpiMode::Meas && command_queue.is_empty() {
+                            command_queue.push_back("MEAS?\n".to_string());
+                            if debug {
+                                println!("Queued MEAS? for polling, queue: {:?}", command_queue);
+                            }
                         }
-                    }
-                }
 
-                // Queue MEAS? for continuous polling in Meas mode if queue is empty
-                if scpimode == ScpiMode::Meas && command_queue.is_empty() {
-                    command_queue.push_back("MEAS?\n".to_string());
-                    if debug {
-                        println!("Queued MEAS? for polling, queue: {:?}", command_queue);
-                    }
+                        tokio::time::sleep(Duration::from_millis(interval)).await;
+                    } => {}
                 }
-
-                tokio::time::sleep(Duration::from_millis(interval)).await;
             }
         });
     }
@@ -645,6 +676,25 @@ impl MyApp {
         self.rangecmd = range_type.and_then(|rt| RangeCmd::new(&self.curr_meter, rt));
         self.curr_range = 0;
     }
+
+    // Updated method to handle disconnection
+    fn disconnect(&mut self) {
+        if let Some(ref mut tx) = self.serial_tx {
+            let _ = tx.try_send("*RST\n".to_string()); // Reset meter before disconnecting
+        }
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(()); // Signal the serial task to shut down
+        }
+        self.serial_tx = None; // Drop sender to stop sending commands
+        self.serial_rx = None; // Drop receiver to stop receiving measurements
+        self.serial = None; // Clear serial port
+        self.connection_state = ConnectionState::Disconnected;
+        self.connection_error = None; // Clear any previous error
+        let mut device = self.device.lock().unwrap();
+        *device = "".to_owned(); // Clear device string
+        self.curr_meas = f64::NAN; // Reset measurement
+        self.values.clear(); // Clear graph data
+    }
 }
 
 impl eframe::App for MyApp {
@@ -696,10 +746,7 @@ impl eframe::App for MyApp {
                         self.settings_open = true;
                     }
                     if !is_web && ui.button("Quit").clicked() {
-                        if let Some(ref mut tx) = self.serial_tx {
-                            let _ = tx.try_send("*RST\n".to_string()); // Reset meter
-                        }
-                        self.serial_tx = None; // Drop sender to stop task
+                        self.disconnect(); // Use disconnect method instead of partial cleanup
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
@@ -728,34 +775,65 @@ impl eframe::App for MyApp {
                         .filter_by_input(false),
                     );
 
-                    if ui.button("Connect").clicked() {
-                        self.serial = mio_serial::new(&self.serial_port, self.baud_rate)
-                            .open_native_async()
-                            .ok();
-                        if self.serial.is_some() {
-                            let _ = self.serial.as_mut().unwrap().set_data_bits(DataBits::Eight);
-                            let _ = self
-                                .serial
-                                .as_mut()
-                                .unwrap()
-                                .set_stop_bits(mio_serial::StopBits::One);
-                            let _ = self
-                                .serial
-                                .as_mut()
-                                .unwrap()
-                                .set_parity(mio_serial::Parity::None);
-                            self.spawn_serial_task();
-                            self.spawn_graph_update_task(ctx.clone()); // Start graph update task
+                    match self.connection_state {
+                        ConnectionState::Disconnected => {
+                            if ui.button("Connect").clicked() {
+                                self.connection_state = ConnectionState::Connecting;
+                                self.connection_error = None;
+                                match mio_serial::new(&self.serial_port, self.baud_rate)
+                                    .open_native_async()
+                                {
+                                    Ok(serial) => {
+                                        self.serial = Some(serial);
+                                        if let Some(ref mut serial) = self.serial {
+                                            let _ = serial.set_data_bits(DataBits::Eight);
+                                            let _ = serial.set_stop_bits(mio_serial::StopBits::One);
+                                            let _ = serial.set_parity(mio_serial::Parity::None);
+                                            self.connection_state = ConnectionState::Connected;
+                                            self.spawn_serial_task();
+                                            self.spawn_graph_update_task(ctx.clone());
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.connection_state = ConnectionState::Disconnected;
+                                        self.connection_error =
+                                            Some(format!("Failed to connect: {}", e));
+                                    }
+                                }
+                            }
+                        }
+                        ConnectionState::Connecting => {
+                            ui.label("Connecting...");
+                        }
+                        ConnectionState::Connected => {
+                            if ui.button("Disconnect").clicked() {
+                                self.disconnect();
+                            }
                         }
                     }
                 });
+
                 ui.horizontal(|ui| {
                     let device = self.device.lock().unwrap();
-                    if !device.is_empty() {
-                        ui.label("Connected to: ");
-                        ui.label(&*device);
-                    } else {
-                        ui.label("Not connected.");
+                    match self.connection_state {
+                        ConnectionState::Disconnected => {
+                            if let Some(ref error) = self.connection_error {
+                                ui.label(egui::RichText::new(error).color(egui::Color32::RED));
+                            } else {
+                                ui.label("Not connected.");
+                            }
+                        }
+                        ConnectionState::Connecting => {
+                            ui.label("Attempting to connect...");
+                        }
+                        ConnectionState::Connected => {
+                            if !device.is_empty() {
+                                ui.label("Connected to: ");
+                                ui.label(&*device);
+                            } else {
+                                ui.label("Connected, awaiting device ID...");
+                            }
+                        }
                     }
                 });
             });
