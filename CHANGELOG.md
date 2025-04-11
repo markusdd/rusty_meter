@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.2
+
+- TBD
+
 ## 0.2.1
 
 - ensure proper graph X-axis bounds
