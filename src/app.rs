@@ -866,11 +866,11 @@ impl eframe::App for MyApp {
                     MeterMode::Cont => self
                         .values
                         .back()
-                        .map_or(false, |&val| val <= self.cont_threshold as f64),
+                        .is_some_and(|&val| val <= self.cont_threshold as f64),
                     MeterMode::Diod => self
                         .values
                         .back()
-                        .map_or(false, |&val| val <= self.diod_threshold as f64),
+                        .is_some_and(|&val| val <= self.diod_threshold as f64),
                     _ => false,
                 };
                 let background_color = if is_below_threshold {
