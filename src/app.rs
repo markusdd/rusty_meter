@@ -861,6 +861,30 @@ impl eframe::App for MyApp {
             ui.separator();
 
             ui.horizontal(|ui| {
+                // Determine if the background and shadow should be dark red based on mode and threshold
+                let is_below_threshold = match self.metermode {
+                    MeterMode::Cont => self
+                        .values
+                        .back()
+                        .map_or(false, |&val| val <= self.cont_threshold as f64),
+                    MeterMode::Diod => self
+                        .values
+                        .back()
+                        .map_or(false, |&val| val <= self.diod_threshold as f64),
+                    _ => false,
+                };
+                let background_color = if is_below_threshold {
+                    egui::Color32::from_rgb(139, 0, 0) // Dark red for threshold condition
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255) // Default black
+                };
+                let shadow_color = if is_below_threshold {
+                    // don't do this for now egui::Color32::from_rgba_unmultiplied(139, 0, 0, 180) // Dark red shadow with alpha
+                    egui::Color32::from_black_alpha(180) // Default black shadow
+                } else {
+                    egui::Color32::from_black_alpha(180) // Default black shadow
+                };
+
                 let meter_frame = egui::Frame {
                     inner_margin: 12.0.into(),
                     outer_margin: 24.0.into(),
@@ -869,9 +893,9 @@ impl eframe::App for MyApp {
                         offset: [8, 12],
                         blur: 16,
                         spread: 0,
-                        color: egui::Color32::from_black_alpha(180),
+                        color: shadow_color,
                     },
-                    fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
+                    fill: background_color,
                     stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
                 };
                 meter_frame.show(ui, |ui| {

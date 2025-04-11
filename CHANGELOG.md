@@ -2,7 +2,8 @@
 
 ## 0.2.1
 
-- ensure proper graph axis bounds
+- ensure proper graph X-axis bounds
+- in CONT and DIOD modes flash the measure frame red as a visual indicator
 
 ## 0.2.0
 
