@@ -71,9 +71,10 @@ fn main() {
 fn load_icon() -> egui::viewport::IconData {
     #[cfg(target_os = "windows")]
     {
-        // Load ICO for Windows
-        let image = image::open("assets/chart-line-solid.ico")
-            .expect("Failed to open icon")
+        // Embed ICO for Windows
+        let ico_bytes = include_bytes!("../assets/chart-line-solid.ico");
+        let image = image::load_from_memory(ico_bytes)
+            .expect("Failed to load icon from memory")
             .to_rgba8();
         let (width, height) = image.dimensions();
         egui::viewport::IconData {
