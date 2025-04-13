@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.3
+
+- TBD
+
 ## 0.2.2
 
 - fix icon for Windows executable
