@@ -2,7 +2,7 @@
 
 ## 0.2.2
 
-- TBD
+- fix icon for Windows executable
 
 ## 0.2.1
 

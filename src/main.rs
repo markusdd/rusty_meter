@@ -32,12 +32,7 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1024.0, 1000.0])
             .with_min_inner_size([300.0, 220.0])
             .with_title("RustyMeter")
-            .with_icon(
-                eframe::icon_data::from_png_bytes(
-                    &include_bytes!("../assets/chart-line-solid.png")[..],
-                )
-                .unwrap(),
-            ),
+            .with_icon(load_icon()),
         ..Default::default()
     };
     eframe::run_native(
@@ -70,4 +65,27 @@ fn main() {
             .await
             .expect("failed to start eframe");
     });
+}
+
+// Function to load the icon (supports both Windows and others)
+fn load_icon() -> egui::viewport::IconData {
+    #[cfg(target_os = "windows")]
+    {
+        // Load ICO for Windows
+        let image = image::open("assets/chart-line-solid.ico")
+            .expect("Failed to open icon")
+            .to_rgba8();
+        let (width, height) = image.dimensions();
+        egui::viewport::IconData {
+            rgba: image.into_raw(),
+            width,
+            height,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Keep PNG for macOS/Linux
+        eframe::icon_data::from_png_bytes(&include_bytes!("../assets/chart-line-solid.png")[..])
+            .expect("Failed to load icon")
+    }
 }
