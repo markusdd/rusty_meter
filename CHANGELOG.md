@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.4
+
+- internal: re-organize modules
+
 ## 0.2.3
 
 - add option to not lock the meter in remote mode

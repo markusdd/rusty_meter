@@ -18,9 +18,8 @@ use std::io;
 use tempfile::{Builder, TempDir};
 use tokio::sync::{mpsc, oneshot};
 
-mod helpers;
-use helpers::format_measurement;
-use helpers::powered_by;
+use crate::helpers::format_measurement;
+use crate::helpers::powered_by;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
