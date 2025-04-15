@@ -277,7 +277,7 @@ pub struct MyApp {
     #[serde(skip)]
     serial_rx: Option<mpsc::Receiver<Option<f64>>>, // handle measurements
     #[serde(skip)]
-    serial_tx: Option<mpsc::Sender<String>>, // channel for sending commands to seriala serial task
+    serial_tx: Option<mpsc::Sender<String>>, // channel for sending commands to serial task
     #[serde(skip)]
     shutdown_tx: Option<oneshot::Sender<()>>, // Signal to shutdown serial task
     #[serde(skip)]
@@ -437,6 +437,7 @@ impl MyApp {
             let mut drop_serial = false; // Flag to indicate when to drop serial
             let mut meas_count = 0; // Counter for measurement cycles
             let mut last_mode = curr_mode;
+            let mut swap_diod_cont = false; // Default to no swap
 
             // Register serial port for readable and writable events
             poll.registry()
@@ -590,6 +591,27 @@ impl MyApp {
                                                                     *device
                                                                 );
                                                             }
+                                                            // Parse *IDN? response to determine DIOD/CONT swap
+                                                            // this is to circumvent a bug on OWON XDM 1041/1241 meters
+                                                            let parts: Vec<&str> = trimmed.split(',').collect();
+                                                            if parts.len() >= 4 && parts[0] == "OWON" && (parts[1] == "XDM1041" || parts[1] == "XDM1241") {
+                                                                let fw_version = parts[3].trim_start_matches('V');
+                                                                let version_parts: Vec<&str> = fw_version.split('.').collect();
+                                                                if version_parts.len() >= 3 {
+                                                                    if let Ok(major) = version_parts[0].parse::<u32>() {
+                                                                        if let Ok(minor) = version_parts[1].parse::<u32>() {
+                                                                            // Swap DIOD/CONT for firmware < 4.3.0
+                                                                            swap_diod_cont = major < 4 || (major == 4 && minor < 3);
+                                                                            if debug {
+                                                                                println!(
+                                                                                    "Firmware detected: V{}.{}.{}, swap_diod_cont: {}",
+                                                                                    major, minor, version_parts[2], swap_diod_cont
+                                                                                );
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
                                                         } else if scpimode == ScpiMode::Meas {
                                                             // Handle quoted function responses
                                                             let unquoted = trimmed.trim_matches('"');
@@ -609,10 +631,9 @@ impl MyApp {
                                                                     "FREQ" => MeterMode::Freq,
                                                                     "PER" => MeterMode::Per,
                                                                     "TEMP" => MeterMode::Temp,
-                                                                    // this is >NOT< a bug here, the OWON XDM returns
-                                                                    // DIOD and CONT modes swapped when asked with FUNC?
-                                                                    "DIOD" => MeterMode::Cont,
-                                                                    "CONT" => MeterMode::Diod,
+                                                                    // Handle DIOD/CONT based on firmware version
+                                                                    "DIOD" => if swap_diod_cont { MeterMode::Cont } else { MeterMode::Diod },
+                                                                    "CONT" => if swap_diod_cont { MeterMode::Diod } else { MeterMode::Cont },
                                                                     _ => continue,
                                                                 };
                                                                 if mode != last_mode {

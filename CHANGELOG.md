@@ -3,6 +3,12 @@
 ## 0.2.4
 
 - internal: re-organize modules
+- detect Firmware version to determine if DIOD/CONT are swapped on readback
+
+Please report an issue if this detection does not work for your meter.
+If you go to CONT mode and you get thrown back into DIOD mode your meter has
+the SCPI bug and the current version check is not sufficient.
+Currently it seems it is fixed for V4.3.0 and above, and broken below.
 
 ## 0.2.3
 
