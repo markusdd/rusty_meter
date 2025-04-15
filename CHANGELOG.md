@@ -2,7 +2,22 @@
 
 ## 0.2.3
 
-- TBD
+- add option to not lock the meter in remote mode
+- add mode readback to sync the UI when meter buttons are used
+- ensure that on connect we take the current meter mode and sync back beeper and polling rate from UI
+
+Disclaimer: We are NOT syncing back the Range, Beeper State and Polling Rate settings from the meter.
+You can change them via buttons on the meter and the values will display completely
+fine as we use the RAW mode for that. If this sync back is wanted leave a feature request.
+It is NOT possible to sync back changed thresholds via meter buttons for CONT and DIOD modes as there is no SCPI command
+for that. Also, the DIOD threshold setting in the UI is purely for the visiual indication in the UI,
+it is currently impossibel to set it remotely as Owon has not provided a SCPI command for that either.
+
+Quirk: When looking at the code you will notice CONT and DIOD mode assignments are swapped when read back via FUNC?.
+This seems to be a firmware bug of the meter. If this isn't consistent across firmware versions we might need to go
+through the trouble to actually distinguish there but we'll see.
+
+Thx to @zach-connolly for suggesting these features and for the donation!
 
 ## 0.2.2
 
