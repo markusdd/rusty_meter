@@ -43,7 +43,7 @@ enum ScpiMode {
     Meas,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MeterMode {
     Vdc,
     Vac,
@@ -203,7 +203,7 @@ impl RangeCmd {
 
     fn owon_xdm1041_temp() -> Self {
         Self {
-            scpi: "CONF:TEMP_RTD ",
+            scpi: "CONF:TEMP:RTD ",
             opts: phf_ordered_map! {
                 "PT100" => "PT100",
                 "K-type (KITS90)" => "KITS90",
@@ -231,6 +231,8 @@ pub struct MyApp {
     beeper_enabled: bool,          // New field for beeper state, persistent
     cont_threshold: u32,           // Persistent continuity threshold (0-1000 ohms)
     diod_threshold: f32,           // Persistent diode threshold (0-3.0 volts)
+    lock_remote: bool,             // Persistent, whether to lock meter in remote mode
+    curr_rate: usize,              // Persistent, current sampling rate index
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -270,17 +272,17 @@ pub struct MyApp {
     #[serde(skip)]
     ratecmd: RateCmd,
     #[serde(skip)]
-    curr_rate: usize,
-    #[serde(skip)]
     rangecmd: Option<RangeCmd>,
     #[serde(skip)]
     curr_range: usize,
     #[serde(skip)]
     serial_rx: Option<mpsc::Receiver<Option<f64>>>, // handle measurements
     #[serde(skip)]
-    serial_tx: Option<mpsc::Sender<String>>, // channel for sending commands to serial task
+    serial_tx: Option<mpsc::Sender<String>>, // channel for sending commands to seriala serial task
     #[serde(skip)]
     shutdown_tx: Option<oneshot::Sender<()>>, // Signal to shutdown serial task
+    #[serde(skip)]
+    mode_rx: Option<mpsc::Receiver<MeterMode>>, // Channel for mode updates
     #[serde(skip)]
     value_debug_shared: Arc<Mutex<bool>>, // Shared debug flag for live updates
     #[serde(skip)]
@@ -293,6 +295,8 @@ pub struct MyApp {
     connection_state: ConnectionState, // New field to track connection status
     #[serde(skip)]
     connection_error: Option<String>, // New field to store connection error message
+    #[serde(skip)]
+    meas_count: u32, // Track measurement cycles for periodic FUNC? polling
 }
 
 // Enum to track connection state
@@ -340,18 +344,21 @@ impl Default for MyApp {
             serial_rx: None,
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal
+            mode_rx: None,     // Initially no mode update channel
             poll_interval_ms: 20,
             graph_update_interval_ms: 20, // Default to 20ms for ~50 FPS
             graph_update_interval_max: 1000, // Default maximum of 1000ms
             beeper_enabled: true,         // Default to on, per meter spec
             cont_threshold: 50,           // Default continuity threshold: 50 ohms
             diod_threshold: 2.0,          // Default diode threshold: 2.0 volts (mid-range)
+            lock_remote: true,            // Default to locking remote mode
             value_debug_shared: Arc::new(Mutex::new(false)),
             poll_interval_shared: Arc::new(Mutex::new(20)),
             graph_update_interval_shared: Arc::new(Mutex::new(20)), // Default shared value to 20ms
             last_graph_update: 0.0,                                 // Initialize to 0
             connection_state: ConnectionState::Disconnected,        // Initially disconnected
             connection_error: None,                                 // No error initially
+            meas_count: 0, // Initialize measurement counter
         }
     }
 }
@@ -401,17 +408,25 @@ impl MyApp {
             return;
         }
 
-        let (tx_data, rx_data) = mpsc::channel::<Option<f64>>(100); // Channel for measurements only
+        let (tx_data, rx_data) = mpsc::channel::<Option<f64>>(100); // Channel for measurements
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // Channel for commands
+        let (tx_mode, rx_mode) = mpsc::channel::<MeterMode>(10); // Channel for mode updates
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>(); // Shutdown signal
         self.serial_rx = Some(rx_data);
         self.serial_tx = Some(tx_cmd.clone());
+        self.mode_rx = Some(rx_mode);
         self.shutdown_tx = Some(shutdown_tx);
 
         let mut serial = self.serial.take().unwrap();
         let value_debug_shared = self.value_debug_shared.clone();
         let poll_interval_shared = self.poll_interval_shared.clone();
-        let device_shared = self.device.clone(); // Clone Arc for task
+        let device_shared = self.device.clone();
+        let lock_remote = self.lock_remote;
+        let beeper_enabled = self.beeper_enabled;
+        let cont_threshold = self.cont_threshold;
+        let diod_threshold = self.diod_threshold;
+        let curr_rate = self.curr_rate;
+        let curr_mode = self.metermode;
 
         tokio::spawn(async move {
             let mut poll = Poll::new().unwrap();
@@ -421,6 +436,8 @@ impl MyApp {
             let mut command_queue: VecDeque<String> = VecDeque::new();
             let mut shutting_down = false;
             let mut drop_serial = false; // Flag to indicate when to drop serial
+            let mut meas_count = 0; // Counter for measurement cycles
+            let mut last_mode = curr_mode;
 
             // Register serial port for readable and writable events
             poll.registry()
@@ -434,8 +451,20 @@ impl MyApp {
                 println!("Serial port registered for READABLE and WRITABLE events");
             }
 
-            // Initial command to identify device
+            // Initial commands
             command_queue.push_back("*IDN?\n".to_string());
+            // Queue initial configuration commands
+            command_queue.push_back(format!(
+                "RATE {}\n",
+                RateCmd::default().opts.index(curr_rate).unwrap().1
+            ));
+            if beeper_enabled {
+                command_queue.push_back("SYST:BEEP:STATe ON\n".to_string());
+            } else {
+                command_queue.push_back("SYST:BEEP:STATe OFF\n".to_string());
+            }
+            command_queue.push_back(format!("CONT:THREshold {}\n", cont_threshold));
+            command_queue.push_back(format!("DIOD:THREshold {}\n", diod_threshold));
 
             loop {
                 tokio::select! {
@@ -493,13 +522,18 @@ impl MyApp {
                                                     if debug {
                                                         println!("Command sent: {:?}", cmd);
                                                     }
-                                                    // Queue SYST:REM and MEAS? after sending *IDN?
+                                                    // Queue SYST:REM (if enabled) and MEAS? after sending *IDN?
                                                     if cmd == "*IDN?\n" && !shutting_down {
-                                                        command_queue.push_back("SYST:REM\n".to_string());
+                                                        if lock_remote {
+                                                            command_queue.push_back("SYST:REM\n".to_string());
+                                                            if debug {
+                                                                println!("Queued SYST:REM after *IDN?");
+                                                            }
+                                                        }
                                                         command_queue.push_back("MEAS?\n".to_string());
                                                         if debug {
                                                             println!(
-                                                                "Queued SYST:REM and MEAS? after sending *IDN?, queue: {:?}",
+                                                                "Queued MEAS? after sending *IDN?, queue: {:?}",
                                                                 command_queue
                                                             );
                                                         }
@@ -546,9 +580,10 @@ impl MyApp {
                                                         println!("Received: {:?}", content);
                                                     }
                                                     if content.ends_with("\r\n") {
+                                                        let trimmed = content.trim_end();
                                                         if scpimode == ScpiMode::Idn {
                                                             let mut device = device_shared.lock().unwrap();
-                                                            *device = content.trim_end().to_owned();
+                                                            *device = trimmed.to_owned();
                                                             scpimode = ScpiMode::Meas;
                                                             if debug {
                                                                 println!(
@@ -557,13 +592,58 @@ impl MyApp {
                                                                 );
                                                             }
                                                         } else if scpimode == ScpiMode::Meas {
-                                                            if let Ok(meas) =
-                                                                content.trim_end().parse::<f64>()
+                                                            // Handle quoted function responses
+                                                            let unquoted = trimmed.trim_matches('"');
+                                                            if unquoted.starts_with("VOLT") || unquoted.starts_with("CURR") ||
+                                                               unquoted == "FREQ" || unquoted == "PER" ||
+                                                               unquoted == "CAP" || unquoted == "CONT" ||
+                                                               unquoted == "DIOD" || unquoted == "RES" ||
+                                                               unquoted == "TEMP"
                                                             {
+                                                                let mode = match unquoted {
+                                                                    "VOLT" => MeterMode::Vdc,
+                                                                    "VOLT AC" => MeterMode::Vac,
+                                                                    "CURR" => MeterMode::Adc,
+                                                                    "CURR AC" => MeterMode::Aac,
+                                                                    "RES" => MeterMode::Res,
+                                                                    "CAP" => MeterMode::Cap,
+                                                                    "FREQ" => MeterMode::Freq,
+                                                                    "PER" => MeterMode::Per,
+                                                                    "TEMP" => MeterMode::Temp,
+                                                                    // this is >NOT< a bug here, the OWON XDM returns
+                                                                    // DIOD and CONT modes swapped when asked with FUNC?
+                                                                    "DIOD" => MeterMode::Cont,
+                                                                    "CONT" => MeterMode::Diod,
+                                                                    _ => continue,
+                                                                };
+                                                                if mode != last_mode {
+                                                                    last_mode = mode;
+                                                                    let _ = tx_mode.send(mode).await;
+                                                                    if mode == MeterMode::Cont {
+                                                                        if beeper_enabled {
+                                                                            command_queue.push_back("SYST:BEEP:STATe ON\n".to_string());
+                                                                        } else {
+                                                                            command_queue.push_back("SYST:BEEP:STATe OFF\n".to_string());
+                                                                        }
+                                                                        command_queue.push_back(format!("CONT:THREshold {}\n", cont_threshold));
+                                                                    } else if mode == MeterMode::Diod {
+                                                                        if beeper_enabled {
+                                                                            command_queue.push_back("SYST:BEEP:STATe ON\n".to_string());
+                                                                        } else {
+                                                                            command_queue.push_back("SYST:BEEP:STATe OFF\n".to_string());
+                                                                        }
+                                                                        command_queue.push_back(format!("DIOD:THREshold {}\n", diod_threshold));
+                                                                    }
+                                                                    if debug {
+                                                                        println!("Sent mode update: {:?}", mode);
+                                                                    }
+                                                                }
+                                                            } else if let Ok(meas) = trimmed.parse::<f64>() {
                                                                 let _ = tx_data.send(Some(meas)).await;
                                                                 if debug {
                                                                     println!("Sent measurement: {}", meas);
                                                                 }
+                                                                meas_count += 1;
                                                             }
                                                         }
                                                     }
@@ -592,11 +672,19 @@ impl MyApp {
                             }
                         }
 
-                        // Queue MEAS? for continuous polling in Meas mode if queue is empty, only if not shutting down
+                        // Queue MEAS? or FUNC? for continuous polling in Meas mode if queue is empty, only if not shutting down
                         if !shutting_down && scpimode == ScpiMode::Meas && command_queue.is_empty() {
-                            command_queue.push_back("MEAS?\n".to_string());
-                            if debug {
-                                println!("Queued MEAS? for polling, queue: {:?}", command_queue);
+                            if meas_count >= 10 {
+                                command_queue.push_back("FUNC?\n".to_string());
+                                meas_count = 0;
+                                if debug {
+                                    println!("Queued FUNC? for polling, queue: {:?}", command_queue);
+                                }
+                            } else {
+                                command_queue.push_back("MEAS?\n".to_string());
+                                if debug {
+                                    println!("Queued MEAS? for polling, queue: {:?}", command_queue);
+                                }
                             }
                         }
 
@@ -707,6 +795,7 @@ impl MyApp {
         }
         self.serial_tx = None; // Drop sender to stop sending commands
         self.serial_rx = None; // Drop receiver to stop receiving measurements
+        self.mode_rx = None; // Drop mode receiver
         self.serial = None; // Clear serial port
         self.connection_state = ConnectionState::Disconnected;
         self.connection_error = None; // Clear any previous error
@@ -714,6 +803,7 @@ impl MyApp {
         *device = "".to_owned(); // Clear device string
         self.curr_meas = f64::NAN; // Reset measurement
         self.values.clear(); // Clear graph data
+        self.meas_count = 0; // Reset measurement counter
     }
 }
 
@@ -734,14 +824,89 @@ impl eframe::App for MyApp {
                     self.portlist.push_front(p.port_name);
                 }
             }
+            // Apply initial sampling rate
+            self.confstring = self
+                .ratecmd
+                .gen_scpi(self.ratecmd.opts.index(self.curr_rate).unwrap().0);
+            if let Some(tx) = self.serial_tx.clone() {
+                let cmd = self.confstring.clone();
+                let value_debug = self.value_debug;
+                tokio::spawn(async move {
+                    if let Err(e) = tx.send(cmd).await {
+                        if value_debug {
+                            println!("Failed to queue initial rate command: {}", e);
+                        }
+                    }
+                });
+            }
             self.is_init = true;
         }
 
-        // Process all available measurements (no longer handling device ID here)
+        // Process all available measurements
         if let Some(ref mut rx) = self.serial_rx {
             while let Ok(meas_opt) = rx.try_recv() {
                 if let Some(meas) = meas_opt {
                     self.curr_meas = meas; // Update curr_meas with new data
+                }
+            }
+        }
+
+        // Process all available mode updates
+        if let Some(ref mut rx) = self.mode_rx {
+            while let Ok(mode) = rx.try_recv() {
+                if mode != self.metermode {
+                    self.metermode = mode;
+                    self.values = VecDeque::with_capacity(self.mem_depth);
+                    match mode {
+                        MeterMode::Vdc => {
+                            self.curr_unit = "VDC".to_owned();
+                            self.rangecmd = RangeCmd::new(&self.curr_meter, "VDC");
+                        }
+                        MeterMode::Vac => {
+                            self.curr_unit = "VAC".to_owned();
+                            self.rangecmd = RangeCmd::new(&self.curr_meter, "VAC");
+                        }
+                        MeterMode::Adc => {
+                            self.curr_unit = "ADC".to_owned();
+                            self.rangecmd = RangeCmd::new(&self.curr_meter, "ADC");
+                        }
+                        MeterMode::Aac => {
+                            self.curr_unit = "AAC".to_owned();
+                            self.rangecmd = RangeCmd::new(&self.curr_meter, "AAC");
+                        }
+                        MeterMode::Res => {
+                            self.curr_unit = "Ohm".to_owned();
+                            self.rangecmd = RangeCmd::new(&self.curr_meter, "RES");
+                        }
+                        MeterMode::Cap => {
+                            self.curr_unit = "F".to_owned();
+                            self.rangecmd = RangeCmd::new(&self.curr_meter, "CAP");
+                        }
+                        MeterMode::Freq => {
+                            self.curr_unit = "Hz".to_owned();
+                            self.rangecmd = None;
+                        }
+                        MeterMode::Per => {
+                            self.curr_unit = "s".to_owned();
+                            self.rangecmd = None;
+                        }
+                        MeterMode::Diod => {
+                            self.curr_unit = "V".to_owned();
+                            self.rangecmd = None;
+                        }
+                        MeterMode::Cont => {
+                            self.curr_unit = "Ohm".to_owned();
+                            self.rangecmd = None;
+                        }
+                        MeterMode::Temp => {
+                            self.curr_unit = "°C".to_owned();
+                            self.rangecmd = RangeCmd::new(&self.curr_meter, "TEMP");
+                        }
+                    }
+                    self.curr_range = 0;
+                    if self.value_debug {
+                        println!("Updated metermode to: {:?}", mode);
+                    }
                 }
             }
         }
@@ -1293,6 +1458,7 @@ impl eframe::App for MyApp {
                         ui.vertical(|ui| {
                             ui.heading("Settings");
                             ui.checkbox(&mut self.connect_on_startup, "Connect on startup");
+                            ui.checkbox(&mut self.lock_remote, "Lock meter in remote mode");
                             ui.checkbox(
                                 &mut self.parity,
                                 "Use parity bit (ignored right now, always None)",
