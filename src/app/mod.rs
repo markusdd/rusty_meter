@@ -3,9 +3,8 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use egui::{
-    Context, FontData, FontDefinitions, FontFamily, Color32,
-};
+
+use egui::{Color32, Context, FontData, FontDefinitions, FontFamily};
 use mio::{Events, Poll};
 use mio_serial::{SerialPortInfo, SerialStream};
 use tokio::sync::{mpsc, oneshot};
@@ -46,6 +45,7 @@ pub struct MyApp {
     reverse_graph: bool,           // Persistent, whether to reverse graph direction
     graph_line_color: Color32,     // Persistent, color for graph line
     measurement_font_color: Color32, // Persistent, color for measurement box font
+    box_background_color: Color32, // Persistent, background color for measurement, mode, and option boxes
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -157,6 +157,7 @@ impl Default for MyApp {
             reverse_graph: false, // Default to right-to-left (most recent on right)
             graph_line_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             measurement_font_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
+            box_background_color: Color32::from_rgba_unmultiplied(0, 0, 0, 255), // Default to black
             serial_rx: None,
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal

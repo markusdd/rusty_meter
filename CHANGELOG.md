@@ -4,6 +4,7 @@
 
 - internal: modularize app.rs to make it more maintainable
 - add option to reverse graphing scroll direction (most recent value always on left)
+- add theming options in settings for graph color, box color and measurement color
 
 ## 0.2.4
 

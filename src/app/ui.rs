@@ -1,6 +1,4 @@
-use egui::{
-    FontFamily, FontId, SliderClamping, Vec2, Stroke,
-};
+use egui::{FontFamily, FontId, SliderClamping, Stroke, Vec2};
 use egui_dropdown::DropDownBox;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use mio_serial::{DataBits, SerialPort, SerialPortBuilderExt};
@@ -159,7 +157,7 @@ impl super::MyApp {
                         )
                         .desired_width(150.0)
                         .select_on_focus(true)
-                        .filter_by_input(false)
+                        .filter_by_input(false),
                     );
 
                     match self.connection_state {
@@ -176,13 +174,15 @@ impl super::MyApp {
                                             let _ = serial.set_data_bits(DataBits::Eight);
                                             let _ = serial.set_stop_bits(mio_serial::StopBits::One);
                                             let _ = serial.set_parity(mio_serial::Parity::None);
-                                            self.connection_state = super::ConnectionState::Connected;
+                                            self.connection_state =
+                                                super::ConnectionState::Connected;
                                             self.spawn_serial_task();
                                             self.spawn_graph_update_task(ctx.clone());
                                         }
                                     }
                                     Err(e) => {
-                                        self.connection_state = super::ConnectionState::Disconnected;
+                                        self.connection_state =
+                                            super::ConnectionState::Disconnected;
                                         self.connection_error =
                                             Some(format!("Failed to connect: {}", e));
                                     }
@@ -243,7 +243,7 @@ impl super::MyApp {
                 let background_color = if is_below_threshold {
                     egui::Color32::from_rgb(139, 0, 0) // Dark red for threshold condition
                 } else {
-                    egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255) // Default black
+                    self.box_background_color // Use custom background color
                 };
                 let shadow_color = if is_below_threshold {
                     // don't do this for now egui::Color32::from_rgba_unmultiplied(139, 0, 0, 180) // Dark red shadow with alpha
@@ -294,7 +294,7 @@ impl super::MyApp {
                                         family: FontFamily::Name("B612Mono-Bold".into()),
                                     }),
                             );
-                        }
+                        },
                     );
                 });
 
@@ -308,7 +308,7 @@ impl super::MyApp {
                         spread: 0,
                         color: egui::Color32::from_black_alpha(180),
                     },
-                    fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
+                    fill: self.box_background_color,
                     stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
                 };
                 control_frame.show(ui, |ui| {
@@ -459,7 +459,7 @@ impl super::MyApp {
                         spread: 0,
                         color: egui::Color32::from_black_alpha(180),
                     },
-                    fill: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 255),
+                    fill: self.box_background_color,
                     stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
                 };
                 options_frame.show(ui, |ui| {
@@ -494,8 +494,8 @@ impl super::MyApp {
                                 |i| rangecmd.get_opt(i).0,
                             );
                             if rangebox.changed() {
-                                self.confstring = rangecmd
-                                    .gen_scpi(rangecmd.get_opt(self.curr_range).0);
+                                self.confstring =
+                                    rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
                                 if let Some(tx) = self.serial_tx.clone() {
                                     let cmd = self.confstring.clone();
                                     tokio::spawn(async move {
@@ -538,7 +538,8 @@ impl super::MyApp {
                                         .step_by(1.0)
                                         .clamping(SliderClamping::Always),
                                 );
-                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus() {
+                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
+                                {
                                     if let Some(tx) = self.serial_tx.clone() {
                                         let cmd =
                                             format!("CONT:THREshold {}\n", self.cont_threshold);
@@ -562,7 +563,8 @@ impl super::MyApp {
                                         .step_by(0.1)
                                         .clamping(SliderClamping::Always),
                                 );
-                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus() {
+                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
+                                {
                                     if let Some(tx) = self.serial_tx.clone() {
                                         let cmd =
                                             format!("DIOD:THREshold {}\n", self.diod_threshold);
@@ -657,7 +659,10 @@ impl super::MyApp {
                 powered_by(ui);
                 ui.hyperlink_to(
                     format!("Version: v{}", super::VERSION),
-                    format!("https://github.com/markusdd/RustyMeter/releases/tag/v{}", super::VERSION),
+                    format!(
+                        "https://github.com/markusdd/RustyMeter/releases/tag/v{}",
+                        super::VERSION
+                    ),
                 );
                 egui::warn_if_debug_build(ui);
             });
