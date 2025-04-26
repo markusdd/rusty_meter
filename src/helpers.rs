@@ -1,4 +1,4 @@
-use crate::app::MeterMode;
+use crate::multimeter::MeterMode;
 
 pub fn format_measurement(
     value: f64,

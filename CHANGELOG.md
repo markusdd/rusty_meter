@@ -2,7 +2,7 @@
 
 ## 0.2.5
 
-- TBD
+- internal: modularize app.rs to make it more maintainable
 
 ## 0.2.4
 

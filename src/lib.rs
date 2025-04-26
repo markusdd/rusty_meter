@@ -3,3 +3,4 @@
 mod app;
 pub use app::MyApp;
 mod helpers;
+mod multimeter;
