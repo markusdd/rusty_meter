@@ -1,4 +1,6 @@
-use egui::{FontFamily, FontId, SliderClamping, Vec2};
+use egui::{
+    FontFamily, FontId, SliderClamping, Vec2, Stroke,
+};
 use egui_dropdown::DropDownBox;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use mio_serial::{DataBits, SerialPort, SerialPortBuilderExt};
@@ -157,7 +159,7 @@ impl super::MyApp {
                         )
                         .desired_width(150.0)
                         .select_on_focus(true)
-                        .filter_by_input(false),
+                        .filter_by_input(false)
                     );
 
                     match self.connection_state {
@@ -174,15 +176,13 @@ impl super::MyApp {
                                             let _ = serial.set_data_bits(DataBits::Eight);
                                             let _ = serial.set_stop_bits(mio_serial::StopBits::One);
                                             let _ = serial.set_parity(mio_serial::Parity::None);
-                                            self.connection_state =
-                                                super::ConnectionState::Connected;
+                                            self.connection_state = super::ConnectionState::Connected;
                                             self.spawn_serial_task();
                                             self.spawn_graph_update_task(ctx.clone());
                                         }
                                     }
                                     Err(e) => {
-                                        self.connection_state =
-                                            super::ConnectionState::Disconnected;
+                                        self.connection_state = super::ConnectionState::Disconnected;
                                         self.connection_error =
                                             Some(format!("Failed to connect: {}", e));
                                     }
@@ -280,7 +280,7 @@ impl super::MyApp {
                             );
                             ui.label(
                                 egui::RichText::new(formatted_value)
-                                    .color(egui::Color32::YELLOW)
+                                    .color(self.measurement_font_color)
                                     .font(FontId {
                                         size: 60.0,
                                         family: FontFamily::Name("B612Mono-Bold".into()),
@@ -288,13 +288,13 @@ impl super::MyApp {
                             );
                             ui.label(
                                 egui::RichText::new(format!("{:>10}", display_unit))
-                                    .color(egui::Color32::YELLOW)
+                                    .color(self.measurement_font_color)
                                     .font(FontId {
                                         size: 20.0,
                                         family: FontFamily::Name("B612Mono-Bold".into()),
                                     }),
                             );
-                        },
+                        }
                     );
                 });
 
@@ -494,8 +494,8 @@ impl super::MyApp {
                                 |i| rangecmd.get_opt(i).0,
                             );
                             if rangebox.changed() {
-                                self.confstring =
-                                    rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
+                                self.confstring = rangecmd
+                                    .gen_scpi(rangecmd.get_opt(self.curr_range).0);
                                 if let Some(tx) = self.serial_tx.clone() {
                                     let cmd = self.confstring.clone();
                                     tokio::spawn(async move {
@@ -538,8 +538,7 @@ impl super::MyApp {
                                         .step_by(1.0)
                                         .clamping(SliderClamping::Always),
                                 );
-                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
-                                {
+                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus() {
                                     if let Some(tx) = self.serial_tx.clone() {
                                         let cmd =
                                             format!("CONT:THREshold {}\n", self.cont_threshold);
@@ -563,8 +562,7 @@ impl super::MyApp {
                                         .step_by(0.1)
                                         .clamping(SliderClamping::Always),
                                 );
-                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
-                                {
+                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus() {
                                     if let Some(tx) = self.serial_tx.clone() {
                                         let cmd =
                                             format!("DIOD:THREshold {}\n", self.diod_threshold);
@@ -596,7 +594,8 @@ impl super::MyApp {
                 } else {
                     values
                 };
-                let line = Line::new(PlotPoints::from_ys_f64(&points));
+                let line = Line::new(PlotPoints::from_ys_f64(&points))
+                    .stroke(Stroke::new(2.0, self.graph_line_color));
                 let plot = Plot::new("graph")
                     .legend(Legend::default())
                     .y_axis_min_width(4.0)
@@ -658,10 +657,7 @@ impl super::MyApp {
                 powered_by(ui);
                 ui.hyperlink_to(
                     format!("Version: v{}", super::VERSION),
-                    format!(
-                        "https://github.com/markusdd/RustyMeter/releases/tag/v{}",
-                        super::VERSION
-                    ),
+                    format!("https://github.com/markusdd/RustyMeter/releases/tag/v{}", super::VERSION),
                 );
                 egui::warn_if_debug_build(ui);
             });

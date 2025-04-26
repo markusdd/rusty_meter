@@ -1,11 +1,13 @@
-use egui::{Context, FontData, FontDefinitions, FontFamily};
-use mio::{Events, Poll};
-use mio_serial::{SerialPortInfo, SerialStream};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
     time::Duration,
 };
+use egui::{
+    Context, FontData, FontDefinitions, FontFamily, Color32,
+};
+use mio::{Events, Poll};
+use mio_serial::{SerialPortInfo, SerialStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::multimeter::{MeterMode, RangeCmd, RateCmd, ScpiMode};
@@ -42,6 +44,8 @@ pub struct MyApp {
     lock_remote: bool,             // Persistent, whether to lock meter in remote mode
     curr_rate: usize,              // Persistent, current sampling rate index
     reverse_graph: bool,           // Persistent, whether to reverse graph direction
+    graph_line_color: Color32,     // Persistent, color for graph line
+    measurement_font_color: Color32, // Persistent, color for measurement box font
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -151,6 +155,8 @@ impl Default for MyApp {
             rangecmd: Some(RangeCmd::default()),
             curr_range: 0,
             reverse_graph: false, // Default to right-to-left (most recent on right)
+            graph_line_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
+            measurement_font_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             serial_rx: None,
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal
