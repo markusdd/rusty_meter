@@ -30,8 +30,7 @@ impl super::MyApp {
                         );
                         ui.label("Data Bits (ignored right now, always 8):");
                         ui.add(
-                            TextEdit::singleline(&mut self.bits.to_string())
-                                .desired_width(800.0),
+                            TextEdit::singleline(&mut self.bits.to_string()).desired_width(800.0),
                         );
                         ui.label("Stop bits (ignored right now, always 1):");
                         ui.add(
@@ -80,8 +79,7 @@ impl super::MyApp {
                             }
                         }
                         ui.label("Maximum graph update interval (ms):");
-                        let mut max_graph_interval_str =
-                            self.graph_update_interval_max.to_string();
+                        let mut max_graph_interval_str = self.graph_update_interval_max.to_string();
                         if ui
                             .add(
                                 TextEdit::singleline(&mut max_graph_interval_str)
@@ -90,8 +88,7 @@ impl super::MyApp {
                             )
                             .changed()
                         {
-                            if let Ok(new_max_interval) = max_graph_interval_str.parse::<u64>()
-                            {
+                            if let Ok(new_max_interval) = max_graph_interval_str.parse::<u64>() {
                                 if new_max_interval >= 10 {
                                     self.graph_update_interval_max = new_max_interval;
                                     // Clamp graph_update_interval_ms to new max if necessary

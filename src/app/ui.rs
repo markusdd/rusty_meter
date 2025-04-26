@@ -1,6 +1,4 @@
-use egui::{
-    FontFamily, FontId, SliderClamping, Vec2,
-};
+use egui::{FontFamily, FontId, SliderClamping, Vec2};
 use egui_dropdown::DropDownBox;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use mio_serial::{DataBits, SerialPort, SerialPortBuilderExt};
@@ -159,7 +157,7 @@ impl super::MyApp {
                         )
                         .desired_width(150.0)
                         .select_on_focus(true)
-                        .filter_by_input(false)
+                        .filter_by_input(false),
                     );
 
                     match self.connection_state {
@@ -176,13 +174,15 @@ impl super::MyApp {
                                             let _ = serial.set_data_bits(DataBits::Eight);
                                             let _ = serial.set_stop_bits(mio_serial::StopBits::One);
                                             let _ = serial.set_parity(mio_serial::Parity::None);
-                                            self.connection_state = super::ConnectionState::Connected;
+                                            self.connection_state =
+                                                super::ConnectionState::Connected;
                                             self.spawn_serial_task();
                                             self.spawn_graph_update_task(ctx.clone());
                                         }
                                     }
                                     Err(e) => {
-                                        self.connection_state = super::ConnectionState::Disconnected;
+                                        self.connection_state =
+                                            super::ConnectionState::Disconnected;
                                         self.connection_error =
                                             Some(format!("Failed to connect: {}", e));
                                     }
@@ -294,7 +294,7 @@ impl super::MyApp {
                                         family: FontFamily::Name("B612Mono-Bold".into()),
                                     }),
                             );
-                        }
+                        },
                     );
                 });
 
@@ -494,8 +494,8 @@ impl super::MyApp {
                                 |i| rangecmd.get_opt(i).0,
                             );
                             if rangebox.changed() {
-                                self.confstring = rangecmd
-                                    .gen_scpi(rangecmd.get_opt(self.curr_range).0);
+                                self.confstring =
+                                    rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
                                 if let Some(tx) = self.serial_tx.clone() {
                                     let cmd = self.confstring.clone();
                                     tokio::spawn(async move {
@@ -538,7 +538,8 @@ impl super::MyApp {
                                         .step_by(1.0)
                                         .clamping(SliderClamping::Always),
                                 );
-                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus() {
+                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
+                                {
                                     if let Some(tx) = self.serial_tx.clone() {
                                         let cmd =
                                             format!("CONT:THREshold {}\n", self.cont_threshold);
@@ -562,7 +563,8 @@ impl super::MyApp {
                                         .step_by(0.1)
                                         .clamping(SliderClamping::Always),
                                 );
-                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus() {
+                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
+                                {
                                     if let Some(tx) = self.serial_tx.clone() {
                                         let cmd =
                                             format!("DIOD:THREshold {}\n", self.diod_threshold);
@@ -588,7 +590,13 @@ impl super::MyApp {
             ui.separator();
 
             ui.vertical(|ui| {
-                let line = Line::new(PlotPoints::from_ys_f64(self.values.make_contiguous()));
+                let values: Vec<f64> = self.values.make_contiguous().to_vec();
+                let points: Vec<f64> = if self.reverse_graph {
+                    values.into_iter().rev().collect()
+                } else {
+                    values
+                };
+                let line = Line::new(PlotPoints::from_ys_f64(&points));
                 let plot = Plot::new("graph")
                     .legend(Legend::default())
                     .y_axis_min_width(4.0)
@@ -598,10 +606,10 @@ impl super::MyApp {
                 plot.show(ui, |plot_ui| {
                     // Get current bounds to base our adjustments on
                     let current_bounds = plot_ui.plot_bounds();
-                    // Set exact x-axis bounds from 0 to mem_depth, y bounds as placeholder
+                    // Set exact x-axis bounds (same for both directions; reverse_graph affects data order)
                     let new_bounds = egui_plot::PlotBounds::from_min_max(
-                        [0.0, current_bounds.min()[1]], // x_min, y_min (will be overridden by y-autoscaling)
-                        [self.mem_depth as f64, current_bounds.max()[1]], // x_max, y_max (will be overridden by y-autoscaling)
+                        [0.0, current_bounds.min()[1]], // x=0 is most recent (if reversed) or oldest
+                        [self.mem_depth as f64, current_bounds.max()[1]], // x=mem_depth is oldest (if reversed) or most recent
                     );
                     plot_ui.set_plot_bounds(new_bounds);
                     // Disable x-axis autoscaling, enable y-axis autoscaling
@@ -612,7 +620,7 @@ impl super::MyApp {
 
             ui.separator();
 
-            // Graph adjustments section with sliders side by side
+            // Graph adjustments section with sliders and checkbox
             ui.vertical(|ui| {
                 ui.label("Graph Adjustments");
                 ui.horizontal(|ui| {
@@ -637,6 +645,10 @@ impl super::MyApp {
                         *self.graph_update_interval_shared.lock().unwrap() =
                             self.graph_update_interval_ms;
                     }
+                    ui.checkbox(
+                        &mut self.reverse_graph,
+                        "Reverse Graph (most recent on left)",
+                    );
                 });
             });
 
@@ -646,7 +658,10 @@ impl super::MyApp {
                 powered_by(ui);
                 ui.hyperlink_to(
                     format!("Version: v{}", super::VERSION),
-                    format!("https://github.com/markusdd/RustyMeter/releases/tag/v{}", super::VERSION),
+                    format!(
+                        "https://github.com/markusdd/RustyMeter/releases/tag/v{}",
+                        super::VERSION
+                    ),
                 );
                 egui::warn_if_debug_build(ui);
             });

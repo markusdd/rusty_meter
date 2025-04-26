@@ -3,6 +3,7 @@
 ## 0.2.5
 
 - internal: modularize app.rs to make it more maintainable
+- add option to reverse graphing scroll direction (most recent value always on left)
 
 ## 0.2.4
 

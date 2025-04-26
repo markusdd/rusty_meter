@@ -41,6 +41,7 @@ pub struct MyApp {
     diod_threshold: f32,           // Persistent diode threshold (0-3.0 volts)
     lock_remote: bool,             // Persistent, whether to lock meter in remote mode
     curr_rate: usize,              // Persistent, current sampling rate index
+    reverse_graph: bool,           // Persistent, whether to reverse graph direction
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -149,6 +150,7 @@ impl Default for MyApp {
             curr_rate: 0,
             rangecmd: Some(RangeCmd::default()),
             curr_range: 0,
+            reverse_graph: false, // Default to right-to-left (most recent on right)
             serial_rx: None,
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal
