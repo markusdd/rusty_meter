@@ -1,6 +1,6 @@
 [package]
 name = "rusty_meter"
-version = "0.2.4"
+version = "0.2.5"
 authors = ["Markus Krause <Krause.Markus@gmx.com>"]
 edition = "2021"
 rust-version = "1.82"

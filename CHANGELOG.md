@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.5
+
+- TBD
+
 ## 0.2.4
 
 - internal: re-organize modules
