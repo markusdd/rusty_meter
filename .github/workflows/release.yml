@@ -64,11 +64,13 @@ jobs:
           docker run --rm -v $(pwd):/usr/src/rusty_meter -w /usr/src/rusty_meter rockylinux:8 /bin/bash -c '
             dnf install -y epel-release &&
             dnf groupinstall -y "Development Tools" &&
-            dnf install -y curl libxkbcommon-devel mesa-libGL-devel libX11-devel wayland-devel \
-                           libpng-devel libjpeg-devel openssl-devel pkgconf-pkg-config &&
+            dnf install -y curl clang libclang-devel libxkbcommon-devel mesa-libGL-devel libX11-devel \
+                           wayland-devel libpng-devel libjpeg-devel openssl-devel pkgconf-pkg-config &&
             curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.82.0 &&
             source $HOME/.cargo/env &&
             rustc --version &&
+            ls -l /usr/lib64/libclang* &&
+            export LIBCLANG_PATH=/usr/lib64 &&
             cargo build --release --target x86_64-unknown-linux-gnu &&
             ldd --version &&
             objdump -p target/x86_64-unknown-linux-gnu/release/rusty_meter | grep GLIBC
