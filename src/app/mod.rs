@@ -71,7 +71,8 @@ pub struct MyApp {
     graph_line_color: Color32,     // Persistent, color for graph line
     measurement_font_color: Color32, // Persistent, color for measurement box font
     box_background_color: Color32, // Persistent, background color for measurement, mode, and option boxes
-    recording_open: bool,          // Persistent, whether recording window is open
+    #[serde(skip)]
+    recording_open: bool, // Do not persist, whether recording viewport is open
     recording_format: RecordingFormat, // Persistent, selected recording format
     recording_file_path: String,   // Persistent, target file path
     recording_mode: RecordingMode, // Persistent, recording mode
@@ -193,7 +194,7 @@ impl Default for MyApp {
             graph_line_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             measurement_font_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             box_background_color: Color32::from_rgba_unmultiplied(0, 0, 0, 255), // Default to black
-            recording_open: false,
+            recording_open: false, // Always start closed
             recording_format: RecordingFormat::Csv,
             recording_file_path: "".to_owned(),
             recording_mode: RecordingMode::FixedInterval,
