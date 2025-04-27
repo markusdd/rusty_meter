@@ -81,6 +81,8 @@ pub struct MyApp {
     #[serde(skip)]
     recording_data: Vec<Record>, // Do not persist recording data
     #[serde(skip)]
+    recording_data_len: usize, // Do not persist, tracks length of recording_data for auto-scroll
+    #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
     metermode: MeterMode,
@@ -201,6 +203,7 @@ impl Default for MyApp {
             recording_interval_ms: 1000, // Default to 1 second
             recording_active: false,
             recording_data: vec![], // Initialize empty, not persisted
+            recording_data_len: 0,  // Initialize to 0, tracks length of recording_data
             serial_rx: None,
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal

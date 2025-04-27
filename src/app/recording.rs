@@ -1,10 +1,7 @@
 use std::fs::File;
 
 use csv::WriterBuilder;
-use egui::{
-    Context, FontId, RichText, ScrollArea, TextEdit, Ui, ViewportBuilder, ViewportCommand,
-    ViewportId,
-};
+use egui::{Context, FontId, RichText, TextEdit, ViewportBuilder, ViewportId};
 use egui_extras::{Column, TableBuilder};
 use rfd::FileDialog;
 use xlsxwriter::Workbook;
@@ -133,10 +130,9 @@ impl super::MyApp {
                             // Manual record button
                             if matches!(self.recording_mode, super::RecordingMode::Manual)
                                 && self.recording_active
+                                && ui.button("Record Now").clicked()
                             {
-                                if ui.button("Record Now").clicked() {
-                                    self.record_measurement();
-                                }
+                                self.record_measurement();
                             }
 
                             // Clear Data button
@@ -147,11 +143,56 @@ impl super::MyApp {
 
                             // Data table
                             ui.separator();
-                            ui.label("Recorded Data:");
-                            ScrollArea::vertical()
-                                .max_height(ui.available_height())
-                                .show(ui, |ui| {
-                                    self.render_data_table(ui);
+                            TableBuilder::new(ui)
+                                .striped(true)
+                                .resizable(true)
+                                .vscroll(true)
+                                .stick_to_bottom(true)
+                                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                                .column(Column::initial(100.0).at_least(50.0))
+                                .column(Column::initial(200.0).at_least(100.0))
+                                .column(Column::initial(100.0).at_least(50.0))
+                                .column(Column::initial(100.0).at_least(50.0))
+                                .header(20.0, |mut header| {
+                                    header.col(|ui| {
+                                        ui.label(
+                                            RichText::new("Index").font(FontId::proportional(16.0)),
+                                        );
+                                    });
+                                    header.col(|ui| {
+                                        ui.label(
+                                            RichText::new("Timestamp")
+                                                .font(FontId::proportional(16.0)),
+                                        );
+                                    });
+                                    header.col(|ui| {
+                                        ui.label(
+                                            RichText::new("Unit").font(FontId::proportional(16.0)),
+                                        );
+                                    });
+                                    header.col(|ui| {
+                                        ui.label(
+                                            RichText::new("Value").font(FontId::proportional(16.0)),
+                                        );
+                                    });
+                                })
+                                .body(|mut body| {
+                                    for record in self.recording_data.iter() {
+                                        body.row(20.0, |mut row| {
+                                            row.col(|ui| {
+                                                ui.label(format!("{}", record.index));
+                                            });
+                                            row.col(|ui| {
+                                                ui.label(record.timestamp.to_rfc3339());
+                                            });
+                                            row.col(|ui| {
+                                                ui.label(&record.unit);
+                                            });
+                                            row.col(|ui| {
+                                                ui.label(format!("{:.4}", record.value));
+                                            });
+                                        });
+                                    }
                                 });
                         });
                     });
@@ -170,52 +211,6 @@ impl super::MyApp {
                 },
             );
         }
-    }
-
-    fn render_data_table(&mut self, ui: &mut Ui) {
-        // Define table with fixed column widths
-        let table = TableBuilder::new(ui)
-            .striped(true)
-            .resizable(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(100.0).at_least(50.0))
-            .column(Column::initial(200.0).at_least(100.0))
-            .column(Column::initial(100.0).at_least(50.0))
-            .column(Column::initial(100.0).at_least(50.0));
-
-        table
-            .header(20.0, |mut header| {
-                header.col(|ui| {
-                    ui.label(RichText::new("Index").font(FontId::proportional(16.0)));
-                });
-                header.col(|ui| {
-                    ui.label(RichText::new("Timestamp").font(FontId::proportional(16.0)));
-                });
-                header.col(|ui| {
-                    ui.label(RichText::new("Unit").font(FontId::proportional(16.0)));
-                });
-                header.col(|ui| {
-                    ui.label(RichText::new("Value").font(FontId::proportional(16.0)));
-                });
-            })
-            .body(|mut body| {
-                for (_row_index, record) in self.recording_data.iter().enumerate() {
-                    body.row(20.0, |mut row| {
-                        row.col(|ui| {
-                            ui.label(format!("{}", record.index));
-                        });
-                        row.col(|ui| {
-                            ui.label(record.timestamp.to_rfc3339());
-                        });
-                        row.col(|ui| {
-                            ui.label(&record.unit);
-                        });
-                        row.col(|ui| {
-                            ui.label(format!("{:.4}", record.value));
-                        });
-                    });
-                }
-            });
     }
 
     pub fn record_measurement(&mut self) {
@@ -241,7 +236,7 @@ impl super::MyApp {
                     File::create(&self.recording_file_path).expect("Failed to create CSV file");
                 let mut writer = WriterBuilder::new().from_writer(file);
                 writer
-                    .write_record(&["Index", "Timestamp", "Unit", "Value"])
+                    .write_record(["Index", "Timestamp", "Unit", "Value"])
                     .expect("Failed to write CSV header");
                 for record in &self.recording_data {
                     writer
@@ -275,7 +270,7 @@ impl super::MyApp {
                     .expect("Failed to write XLSX header");
                 sheet
                     .write_string(0, 2, "Unit", None)
-                    .expect("Failed to write XLSX header");
+                    .expect("Fixed headers");
                 sheet
                     .write_string(0, 3, "Value", None)
                     .expect("Failed to write XLSX header");
