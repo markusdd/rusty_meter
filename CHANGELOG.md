@@ -3,6 +3,13 @@
 ## 0.3.0
 
 - recording function for CSV, JSON and XLSX
+- add MIT license file
+- move Linux builds to Rocky Linux 8 for the oldest supported GLIBC base (ressolve #1)
+
+IMPORTANT:
+If the program crashes the first time you try to launch the recording function this might be due to old
+window states in your program save state. In that case just re-launch it and move it around and close it again cleanly. This should write a clean new state and it should not happen again. This is a drawback
+deep down in egui which I cannot do much about right now.
 
 ## 0.2.5
 

@@ -6,6 +6,8 @@ If you like this, a small donation is appreciated:
 
 ![screenshot](assets/screenshot.png)
 
+![recorder](assets/recorder.png)
+
 This is a GUI application written in Rust powered by the awesome egui framework and builds
 on the work of @TheHWCave to turn your OWON XDM1041 multimeter into a PC-based powerhouse
 with neat graphing, recording, using it on stream etc.
@@ -13,14 +15,13 @@ with neat graphing, recording, using it on stream etc.
 Eventually, as this is all SCPI based, it could also be extended to other meters that have SCPI interfaces.
 Maybe some stuff even works out of the box.
 
-**NOTE:** This is work and progress and I have more features for this in mind. what works right now is connecting to the multimeter, switching modes and ranges as well as sampling rates. You also get nice graphing for a configureable amount of last samples.
+**NOTE:** This is work and progress and I have more features for this in mind. what works right now is connecting to the multimeter, switching modes and ranges as well as sampling rates. You also get nice graphing for a configureable amount of last samples and you can record samples to CSV, XLSX and JSON.
 
 **TODO:**
 
 - math modes
 - code refactoring for easier integration of other meters
 - make serial parameters changeable
-- csv record export
 
 ## How to get going
 
