@@ -28,9 +28,11 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             suffix: ''
+            use_docker: false
           - os: macos-14
             target: aarch64-apple-darwin
             suffix: ''
+            use_docker: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             suffix: ''
@@ -38,6 +40,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             suffix: .exe
+            use_docker: false
     steps:
       - uses: actions/checkout@master
         with:
@@ -52,11 +55,11 @@ jobs:
         run: echo "VERSION=$(cat ./version/version)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Set up Docker for Linux build
-        if: matrix.use_docker
+        if: ${{ matrix.use_docker }}
         run: |
           echo "Running Linux build in Docker container"
       - name: Build Linux binary in Docker
-        if: matrix.use_docker
+        if: ${{ matrix.use_docker }}
         run: |
           docker run --rm -v $(pwd):/usr/src/rusty_meter -w /usr/src/rusty_meter rockylinux:8 /bin/bash -c '
             dnf install -y epel-release &&
@@ -69,32 +72,32 @@ jobs:
             objdump -p target/x86_64-unknown-linux-gnu/release/rusty_meter | grep GLIBC
           '
       - name: Cache Rust dependencies (non-Docker)
-        if: !matrix.use_docker
+        if: ${{ !matrix.use_docker }}
         uses: actions/cache@master
         with:
           path: ~/.cargo/registry
           key: '${{ runner.os }}-cargo-registry-${{ hashFiles(''**/Cargo.lock'') }}'
       - name: Cache Rust git index (non-Docker)
-        if: !matrix.use_docker
+        if: ${{ !matrix.use_docker }}
         uses: actions/cache@master
         with:
           path: ~/.cargo/git
           key: '${{ runner.os }}-cargo-index-${{ hashFiles(''**/Cargo.lock'') }}'
       - name: Cache build target (non-Docker)
-        if: !matrix.use_docker
+        if: ${{ !matrix.use_docker }}
         uses: actions/cache@master
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
       - name: Install Rust toolchain (non-Docker)
-        if: !matrix.use_docker
+        if: ${{ !matrix.use_docker }}
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
       - name: Build (non-Docker)
-        if: !matrix.use_docker
+        if: ${{ !matrix.use_docker }}
         uses: actions-rs/cargo@v1
         env:
           VERSION: '${{ steps.get_version.outputs.VERSION }}'
