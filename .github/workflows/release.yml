@@ -63,8 +63,9 @@ jobs:
         run: |
           docker run --rm -v $(pwd):/usr/src/rusty_meter -w /usr/src/rusty_meter rockylinux:8 /bin/bash -c '
             dnf install -y epel-release &&
+            dnf config-manager --set-enabled powertools &&
             dnf groupinstall -y "Development Tools" &&
-            dnf install -y curl clang libclang-devel libxkbcommon-devel mesa-libGL-devel libX11-devel \
+            dnf install -y curl clang clang-devel libxkbcommon-devel mesa-libGL-devel libX11-devel \
                            wayland-devel libpng-devel libjpeg-devel openssl-devel pkgconf-pkg-config &&
             curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.82.0 &&
             source $HOME/.cargo/env &&
