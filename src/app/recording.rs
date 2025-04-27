@@ -139,29 +139,20 @@ impl super::MyApp {
                                 }
                             }
 
+                            // Clear Data button
+                            ui.add_space(10.0);
+                            if ui.button("Clear Data").clicked() {
+                                self.recording_data.clear();
+                            }
+
                             // Data table
                             ui.separator();
                             ui.label("Recorded Data:");
                             ScrollArea::vertical()
-                                .max_height(ui.available_height() - 50.0)
+                                .max_height(ui.available_height())
                                 .show(ui, |ui| {
                                     self.render_data_table(ui);
                                 });
-
-                            // Spacer and buttons
-                            ui.add_space(10.0);
-                            ui.horizontal(|ui| {
-                                if ui.button("Clear Data").clicked() {
-                                    self.recording_data.clear();
-                                }
-                                if ui.button("Close").clicked() {
-                                    if self.recording_active {
-                                        self.recording_active = false;
-                                        self.save_recording_data();
-                                    }
-                                    self.recording_open = false;
-                                }
-                            });
                         });
                     });
 
