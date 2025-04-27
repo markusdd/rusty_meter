@@ -37,6 +37,12 @@ pub enum RecordingMode {
     Manual,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum TimestampFormat {
+    Rfc3339,
+    Unix,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Record {
     pub index: usize, // New field for measurement index
@@ -78,6 +84,7 @@ pub struct MyApp {
     recording_mode: RecordingMode, // Persistent, recording mode
     recording_interval_ms: u64,    // Persistent, fixed interval duration
     recording_active: bool,        // Persistent, whether recording is active
+    recording_timestamp_format: TimestampFormat, // Persistent, timestamp format
     #[serde(skip)]
     recording_data: Vec<Record>, // Do not persist recording data
     #[serde(skip)]
@@ -202,8 +209,9 @@ impl Default for MyApp {
             recording_mode: RecordingMode::FixedInterval,
             recording_interval_ms: 1000, // Default to 1 second
             recording_active: false,
-            recording_data: vec![], // Initialize empty, not persisted
-            recording_data_len: 0,  // Initialize to 0, tracks length of recording_data
+            recording_timestamp_format: TimestampFormat::Rfc3339, // Default to RFC3339
+            recording_data: vec![],                               // Initialize empty, not persisted
+            recording_data_len: 0, // Initialize to 0, tracks length of recording_data
             serial_rx: None,
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal
