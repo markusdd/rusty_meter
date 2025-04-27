@@ -1,3 +1,5 @@
+use chrono::DateTime;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
@@ -21,8 +23,29 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MEM_DEPTH_DEFAULT: usize = 100; // Default slider value
 const MEM_DEPTH_MAX_DEFAULT: usize = 2000; // Default maximum
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum RecordingFormat {
+    Csv,
+    Json,
+    Xlsx,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum RecordingMode {
+    FixedInterval,
+    Manual,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Record {
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timestamp: DateTime<chrono::Utc>,
+    pub unit: String,
+    pub value: f64,
+}
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
 pub struct MyApp {
     serial_port: String,
@@ -46,6 +69,13 @@ pub struct MyApp {
     graph_line_color: Color32,     // Persistent, color for graph line
     measurement_font_color: Color32, // Persistent, color for measurement box font
     box_background_color: Color32, // Persistent, background color for measurement, mode, and option boxes
+    recording_open: bool,          // Persistent, whether recording window is open
+    recording_format: RecordingFormat, // Persistent, selected recording format
+    recording_file_path: String,   // Persistent, target file path
+    recording_mode: RecordingMode, // Persistent, recording mode
+    recording_interval_ms: u64,    // Persistent, fixed interval duration
+    recording_active: bool,        // Persistent, whether recording is active
+    recording_data: Vec<Record>,   // Persistent, recorded data
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -110,6 +140,8 @@ pub struct MyApp {
     connection_error: Option<String>, // New field to store connection error message
     #[serde(skip)]
     meas_count: u32, // Track measurement cycles for periodic FUNC? polling
+    #[serde(skip)]
+    last_record_time: f64, // Track last recording time for fixed interval
 }
 
 // Enum to track connection state
@@ -158,6 +190,13 @@ impl Default for MyApp {
             graph_line_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             measurement_font_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             box_background_color: Color32::from_rgba_unmultiplied(0, 0, 0, 255), // Default to black
+            recording_open: false,
+            recording_format: RecordingFormat::Csv,
+            recording_file_path: "".to_owned(),
+            recording_mode: RecordingMode::FixedInterval,
+            recording_interval_ms: 1000, // Default to 1 second
+            recording_active: false,
+            recording_data: vec![],
             serial_rx: None,
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal
@@ -175,7 +214,8 @@ impl Default for MyApp {
             last_graph_update: 0.0,                                 // Initialize to 0
             connection_state: ConnectionState::Disconnected,        // Initially disconnected
             connection_error: None,                                 // No error initially
-            meas_count: 0, // Initialize measurement counter
+            meas_count: 0,         // Initialize measurement counter
+            last_record_time: 0.0, // Initialize last recording time
         }
     }
 }

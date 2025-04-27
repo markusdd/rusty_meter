@@ -1,10 +1,9 @@
 [package]
 name = "rusty_meter"
-version = "0.2.5"
+version = "0.3.0"
 authors = ["Markus Krause <Krause.Markus@gmx.com>"]
 edition = "2021"
 rust-version = "1.82"
-
 
 [dependencies]
 egui = "0.31.1"
@@ -36,13 +35,11 @@ arboard = "3.5.0"
 mio-serial = "5.0.6"
 mio = "1.0.3"
 tokio = { version = "1.44.2", features = ["full"] }
-
-# You only need serde if you want app persistence:
 serde = { version = "1.0.219", features = ["derive"] }
-
-[build-dependencies]
-# for windows icon embedding
-winres = "0.1"
+csv = "1.3.0" # For CSV output
+xlsxwriter = "0.6.1" # For XLSX output
+chrono = { version = "0.4.38", features = ["serde"] } # For timestamp handling with serde
+rfd = "0.15.0" # For file dialogs
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -52,9 +49,9 @@ env_logger = "0.11.8"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4.49"
 
-
-# [profile.release]
-# opt-level = 2 # fast and small wasm
+[build-dependencies]
+# for windows icon embedding
+winres = "0.1"
 
 [profile.release]
 opt-level = 3     # Optimize for speed without exploding size
@@ -66,14 +63,3 @@ strip = true      # Strip symbols from binary*
 # Optimize all dependencies even in debug builds:
 [profile.dev.package."*"]
 opt-level = 2
-
-
-[patch.crates-io]
-
-# If you want to use the bleeding edge version of egui and eframe:
-# egui = { git = "https://github.com/emilk/egui", branch = "master" }
-# eframe = { git = "https://github.com/emilk/egui", branch = "master" }
-
-# If you fork https://github.com/emilk/egui you can test with:
-# egui = { path = "../egui/crates/egui" }
-# eframe = { path = "../egui/crates/eframe" }

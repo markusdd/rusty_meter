@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.3.0
+
+- recording function for CSV, JSON and XLSX
+
 ## 0.2.5
 
 - internal: modularize app.rs to make it more maintainable

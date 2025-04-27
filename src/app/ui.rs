@@ -10,6 +10,10 @@ use crate::multimeter::{GenScpi, MeterMode, RangeCmd};
 impl super::MyApp {
     /// Called by the framework to save state before shutdown.
     pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // Save recording data if recording is active
+        if self.recording_active {
+            self.save_recording_data();
+        }
         eframe::set_value(storage, eframe::APP_KEY, self);
     }
 
@@ -111,7 +115,7 @@ impl super::MyApp {
             }
         }
 
-        // Handle graph updates based on the configured interval
+        // Handle graph updates and recording based on the configured interval
         let current_time = ctx.input(|i| i.time); // Get current time in seconds
         let graph_interval = *self.graph_update_interval_shared.lock().unwrap() as f64 / 1000.0; // Convert ms to seconds
         if current_time - self.last_graph_update >= graph_interval {
@@ -119,6 +123,15 @@ impl super::MyApp {
                 self.values.push_back(self.curr_meas);
                 while self.values.len() > self.mem_depth {
                     self.values.pop_front();
+                }
+                // Record measurement for fixed interval mode
+                if self.recording_active
+                    && matches!(self.recording_mode, super::RecordingMode::FixedInterval)
+                    && current_time - self.last_record_time
+                        >= self.recording_interval_ms as f64 / 1000.0
+                {
+                    self.record_measurement();
+                    self.last_record_time = current_time;
                 }
             }
             self.last_graph_update = current_time;
@@ -197,6 +210,11 @@ impl super::MyApp {
                                 self.disconnect();
                             }
                         }
+                    }
+
+                    // Recording button
+                    if ui.button("Start Recording").clicked() {
+                        self.recording_open = true;
                     }
                 });
 
@@ -667,8 +685,9 @@ impl super::MyApp {
                 egui::warn_if_debug_build(ui);
             });
 
-            // Settings window
+            // Show settings and recording windows
             self.show_settings(ctx);
+            self.show_recording_window(ctx);
         });
     }
 }
