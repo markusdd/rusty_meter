@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use csv::WriterBuilder;
 use egui::{Context, FontId, RichText, TextEdit, ViewportBuilder, ViewportId};
@@ -66,20 +66,21 @@ impl super::MyApp {
                                         .file_stem()
                                         .map(|s| s.to_string_lossy())
                                         .unwrap_or_default();
-                                    let parent = path
-                                        .parent()
-                                        .map(|p| p.to_string_lossy())
-                                        .unwrap_or_default();
                                     let new_extension = match self.recording_format {
                                         super::RecordingFormat::Csv => "csv",
                                         super::RecordingFormat::Json => "json",
                                         super::RecordingFormat::Xlsx => "xlsx",
                                     };
-                                    self.recording_file_path = if parent.is_empty() {
-                                        format!("{}.{}", stem, new_extension)
+                                    // Preserve the parent path and use platform-specific separators
+                                    let new_path = if let Some(parent) = path.parent() {
+                                        let mut new_path = PathBuf::from(parent);
+                                        new_path.push(format!("{}.{}", stem, new_extension));
+                                        new_path
                                     } else {
-                                        format!("{}/{}.{}", parent, stem, new_extension)
+                                        PathBuf::from(format!("{}.{}", stem, new_extension))
                                     };
+                                    self.recording_file_path =
+                                        new_path.to_string_lossy().into_owned();
                                 }
                             });
 
