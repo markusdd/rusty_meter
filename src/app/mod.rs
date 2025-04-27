@@ -14,6 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::multimeter::{MeterMode, RangeCmd, RateCmd, ScpiMode};
 
 // Submodules for split impl blocks
+mod recording;
 mod serial;
 mod settings;
 mod ui;
@@ -38,6 +39,7 @@ pub enum RecordingMode {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Record {
+    pub index: usize, // New field for measurement index
     #[serde(with = "chrono::serde::ts_seconds")]
     pub timestamp: DateTime<chrono::Utc>,
     pub unit: String,
@@ -75,7 +77,8 @@ pub struct MyApp {
     recording_mode: RecordingMode, // Persistent, recording mode
     recording_interval_ms: u64,    // Persistent, fixed interval duration
     recording_active: bool,        // Persistent, whether recording is active
-    recording_data: Vec<Record>,   // Persistent, recorded data
+    #[serde(skip)]
+    recording_data: Vec<Record>, // Do not persist recording data
     #[serde(skip)]
     curr_meter: String,
     #[serde(skip)]
@@ -196,7 +199,7 @@ impl Default for MyApp {
             recording_mode: RecordingMode::FixedInterval,
             recording_interval_ms: 1000, // Default to 1 second
             recording_active: false,
-            recording_data: vec![],
+            recording_data: vec![], // Initialize empty, not persisted
             serial_rx: None,
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal
