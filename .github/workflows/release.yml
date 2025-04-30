@@ -26,12 +26,8 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            target: x86_64-apple-darwin
-            suffix: ''
-            use_docker: false
-          - os: macos-14
-            target: aarch64-apple-darwin
-            suffix: ''
+            target: universal-apple-darwin
+            suffix: .dmg
             use_docker: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
@@ -76,6 +72,13 @@ jobs:
             ldd --version &&
             objdump -p target/x86_64-unknown-linux-gnu/release/rusty_meter | grep GLIBC
           '
+      - name: Install Rust toolchain (non-Docker)
+        if: ${{ !matrix.use_docker }}
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
       - name: Cache Rust dependencies (non-Docker)
         if: ${{ !matrix.use_docker }}
         uses: actions/cache@master
@@ -94,15 +97,81 @@ jobs:
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-      - name: Install Rust toolchain (non-Docker)
-        if: ${{ !matrix.use_docker }}
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - name: Build (non-Docker)
-        if: ${{ !matrix.use_docker }}
+      - name: Install dependencies for macOS DMG
+        if: ${{ matrix.target == 'universal-apple-darwin' }}
+        run: |
+          brew install imagemagick libpng create-dmg
+          npm install -g @electron-forge/cli
+      - name: Build macOS universal binary
+        if: ${{ matrix.target == 'universal-apple-darwin' }}
+        run: |
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          lipo -create -output target/release/rusty_meter \
+            target/x86_64-apple-darwin/release/rusty_meter \
+            target/aarch64-apple-darwin/release/rusty_meter
+          chmod +x target/release/rusty_meter
+      - name: Convert SVG to ICNS
+        if: ${{ matrix.target == 'universal-apple-darwin' }}
+        run: |
+          mkdir -p icon.iconset
+          convert -background none -resize 16x16 assets/chart-line-solid.svg icon.iconset/icon_16x16.png
+          convert -background none -resize 32x32 assets/chart-line-solid.svg icon.iconset/icon_16x16@2x.png
+          convert -background none -resize 32x32 assets/chart-line-solid.svg icon.iconset/icon_32x32.png
+          convert -background none -resize 64x64 assets/chart-line-solid.svg icon.iconset/icon_32x32@2x.png
+          convert -background none -resize 128x128 assets/chart-line-solid.svg icon.iconset/icon_128x128.png
+          convert -background none -resize 256x256 assets/chart-line-solid.svg icon.iconset/icon_128x128@2x.png
+          convert -background none -resize 256x256 assets/chart-line-solid.svg icon.iconset/icon_256x256.png
+          convert -background none -resize 512x512 assets/chart-line-solid.svg icon.iconset/icon_256x256@2x.png
+          convert -background none -resize 512x512 assets/chart-line-solid.svg icon.iconset/icon_512x512.png
+          convert -background none -resize 1024x1024 assets/chart-line-solid.svg icon.iconset/icon_512x512@2x.png
+          iconutil -c icns icon.iconset -o assets/RustyMeter.icns
+      - name: Create macOS app bundle
+        if: ${{ matrix.target == 'universal-apple-darwin' }}
+        run: |
+          mkdir -p RustyMeter.app/Contents/MacOS
+          mkdir -p RustyMeter.app/Contents/Resources
+          cp target/release/rusty_meter RustyMeter.app/Contents/MacOS/RustyMeter
+          cp assets/RustyMeter.icns RustyMeter.app/Contents/Resources/RustyMeter.icns
+          cat << EOF > RustyMeter.app/Contents/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>RustyMeter</string>
+            <key>CFBundleIconFile</key>
+            <string>RustyMeter</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.example.RustyMeter</string>
+            <key>CFBundleName</key>
+            <string>RustyMeter</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleVersion</key>
+            <string>${{ steps.get_version.outputs.VERSION }}</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>10.13</string>
+          </dict>
+          </plist>
+          EOF
+      - name: Create DMG
+        if: ${{ matrix.target == 'universal-apple-darwin' }}
+        run: |
+          create-dmg \
+            --volname "RustyMeter" \
+            --volicon "assets/RustyMeter.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "RustyMeter.app" 200 190 \
+            --hide-extension "RustyMeter.app" \
+            --app-drop-link 600 185 \
+            "RustyMeter-${{ steps.get_version.outputs.VERSION }}.dmg" \
+            "RustyMeter.app"
+      - name: Build (non-Docker, non-macOS)
+        if: ${{ !matrix.use_docker && matrix.target != 'universal-apple-darwin' }}
         uses: actions-rs/cargo@v1
         env:
           VERSION: '${{ steps.get_version.outputs.VERSION }}'
@@ -114,7 +183,8 @@ jobs:
         uses: actions/upload-artifact@master
         with:
           name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-${{ matrix.target }}
-          path: ./target/${{ matrix.use_docker && 'x86_64-unknown-linux-gnu/' || '' }}release/rusty_meter${{ matrix.suffix }}
+          path: |
+            ${{ matrix.target == 'universal-apple-darwin' && format('RustyMeter-{0}.dmg', steps.get_version.outputs.VERSION) || format('./target/{1}release/rusty_meter{0}', matrix.suffix, matrix.use_docker && 'x86_64-unknown-linux-gnu/' || '') }}
 
   release:
     needs:
@@ -139,12 +209,8 @@ jobs:
           path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-unknown-linux-gnu/
       - uses: actions/download-artifact@master
         with:
-          name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-apple-darwin
-          path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-apple-darwin/
-      - uses: actions/download-artifact@master
-        with:
-          name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-aarch64-apple-darwin
-          path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-aarch64-apple-darwin/
+          name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-universal-apple-darwin
+          path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-universal-apple-darwin/
       - uses: actions/download-artifact@master
         with:
           name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-pc-windows-msvc
@@ -177,17 +243,9 @@ jobs:
           GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
         with:
           upload_url: '${{ steps.create_release.outputs.upload_url }}'
-          asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-apple-darwin/rusty_meter
-          asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-apple-darwin
-          asset_content_type: application/octet-stream
-      - uses: actions/upload-release-asset@latest
-        env:
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
-        with:
-          upload_url: '${{ steps.create_release.outputs.upload_url }}'
-          asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-aarch64-apple-darwin/rusty_meter
-          asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-aarch64-apple-darwin
-          asset_content_type: application/octet-stream
+          asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-universal-apple-darwin/RustyMeter-${{ steps.get_version.outputs.VERSION }}.dmg
+          asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-universal-apple-darwin.dmg
+          asset_content_type: application/x-diskcopy
       - uses: actions/upload-release-asset@latest
         env:
           GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'

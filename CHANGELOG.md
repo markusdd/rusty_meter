@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.3.1
+
+- release MacOS builds as universal DMG
+
 ## 0.3.0
 
 - recording function for CSV, JSON and XLSX
