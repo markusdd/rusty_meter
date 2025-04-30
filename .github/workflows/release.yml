@@ -47,8 +47,9 @@ jobs:
       - uses: actions/download-artifact@master
         with:
           name: version
+          path: ./version
       - id: get_version
-        run: echo "VERSION=$(cat ./version/version)" >> $GITHUB_OUTPUT
+        run: echo "VERSION=$(cat ./version)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Set up Docker for Linux build
         if: ${{ matrix.use_docker }}
@@ -170,6 +171,7 @@ jobs:
             --app-drop-link 600 185 \
             "RustyMeter-${{ steps.get_version.outputs.VERSION }}.dmg" \
             "RustyMeter.app"
+          ls -l *.dmg
       - name: Build (non-Docker, non-macOS)
         if: ${{ !matrix.use_docker && matrix.target != 'universal-apple-darwin' }}
         uses: actions-rs/cargo@v1
@@ -200,6 +202,7 @@ jobs:
       - uses: actions/download-artifact@master
         with:
           name: version
+          path: ./version
       - id: get_version
         run: echo "VERSION=$(cat ./version)" >> $GITHUB_OUTPUT
         shell: bash
@@ -215,7 +218,7 @@ jobs:
         with:
           name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-pc-windows-msvc
           path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-pc-windows-msvc/
-      - run: ls -lah
+      - run: ls -lah ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-universal-apple-darwin/
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
