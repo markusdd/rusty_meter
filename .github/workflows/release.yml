@@ -117,6 +117,8 @@ jobs:
         if: ${{ matrix.target == 'universal-apple-darwin' }}
         run: |
           mkdir -p icon.iconset
+          mkdir -p icon-dmg.iconset
+          # Generate PNGs for application ICNS
           convert -background none -resize 16x16 assets/chart-line-solid.svg icon.iconset/icon_16x16.png
           convert -background none -resize 32x32 assets/chart-line-solid.svg icon.iconset/icon_16x16@2x.png
           convert -background none -resize 32x32 assets/chart-line-solid.svg icon.iconset/icon_32x32.png
@@ -128,6 +130,10 @@ jobs:
           convert -background none -resize 512x512 assets/chart-line-solid.svg icon.iconset/icon_512x512.png
           convert -background none -resize 1024x1024 assets/chart-line-solid.svg icon.iconset/icon_512x512@2x.png
           iconutil -c icns icon.iconset -o assets/RustyMeter.icns
+          # Generate high-quality PNGs for DMG ICNS
+          convert -background none -density 144 -resize 512x512 assets/chart-line-solid.svg icon-dmg.iconset/icon_256x256@2x.png
+          convert -background none -density 144 -resize 1024x1024 assets/chart-line-solid.svg icon-dmg.iconset/icon_512x512@2x.png
+          iconutil -c icns icon-dmg.iconset -o assets/RustyMeter-dmg.icns
       - name: Create macOS app bundle
         if: ${{ matrix.target == 'universal-apple-darwin' }}
         run: |
@@ -162,7 +168,7 @@ jobs:
         run: |
           create-dmg \
             --volname "RustyMeter" \
-            --volicon "assets/RustyMeter.icns" \
+            --volicon "assets/RustyMeter-dmg.icns" \
             --window-pos 200 120 \
             --window-size 800 400 \
             --icon-size 100 \
