@@ -2,7 +2,7 @@
 
 ## 0.3.2
 
-- TBD
+- Offer Linux AppImage in addition to bare binary for proper icon/desktop integration with Wayland
 
 ## 0.3.1
 

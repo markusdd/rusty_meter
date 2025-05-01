@@ -73,6 +73,33 @@ jobs:
             ldd --version &&
             objdump -p target/x86_64-unknown-linux-gnu/release/rusty_meter | grep GLIBC
           '
+      - name: Create AppImage for Linux
+        if: ${{ matrix.use_docker }}
+        run: |
+          # Download linuxdeploy AppImage
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          # Create AppDir structure
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/48x48/apps
+          # Copy binary
+          cp target/x86_64-unknown-linux-gnu/release/rusty_meter AppDir/usr/bin/
+          # Copy icon
+          cp assets/chart-line-solid.png AppDir/usr/share/icons/hicolor/48x48/apps/chart-line-solid.png
+          # Create .desktop file
+          cat << EOF > AppDir/usr/share/applications/multimeter.desktop
+          [Desktop Entry]
+          Name=RustyMeter
+          Exec=rusty_meter
+          Type=Application
+          Icon=chart-line-solid
+          Terminal=false
+          Categories=Utility;
+          EOF
+          # Generate AppImage
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
+          mv RustyMeter*.AppImage RustyMeter-${{ steps.get_version.outputs.VERSION }}-x86_64.AppImage
       - name: Install Rust toolchain (non-Docker)
         if: ${{ !matrix.use_docker }}
         uses: actions-rs/toolchain@v1
@@ -108,8 +135,7 @@ jobs:
         run: |
           rustup target add x86_64-apple-darwin aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
-          cargo build --release --target aarch64-apple-darwin
-          lipo -create -output target/release/rusty_meter \
+          cargo build --release0release/rusty_meter \
             target/x86_64-apple-darwin/release/rusty_meter \
             target/aarch64-apple-darwin/release/rusty_meter
           chmod +x target/release/rusty_meter
@@ -200,7 +226,8 @@ jobs:
         with:
           name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-${{ matrix.target }}
           path: |
-            ${{ matrix.target == 'universal-apple-darwin' && format('RustyMeter-{0}.dmg', steps.get_version.outputs.VERSION) || format('./target/{1}release/rusty_meter{0}', matrix.suffix, matrix.use_docker && 'x86_64-unknown-linux-gnu/' || '') }}
+            ${{ matrix.target == 'universal-apple-darwin' && format('RustyMeter-{0}.dmg', steps.get_version.outputs.VERSION) || matrix.target == 'x86_64-unknown-linux-gnu' && format('RustyMeter-{0}-x86_64.AppImage', steps.get_version.outputs.VERSION) || format('./target/{1}release/rusty_meter{0}', matrix.suffix, matrix.use_docker && 'x86_64-unknown-linux-gnu/' || '') }}
+            ${{ matrix.target == 'x86_64-unknown-linux-gnu' && './target/x86_64-unknown-linux-gnu/release/rusty_meter' || '' }}
 
   release:
     needs:
@@ -255,6 +282,14 @@ jobs:
           asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-unknown-linux-gnu/rusty_meter
           asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-unknown-linux-gnu
           asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@latest
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+        with:
+          upload_url: '${{ steps.create_release.outputs.upload_url }}'
+          asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-unknown-linux-gnu/RustyMeter-${{ steps.get_version.outputs.VERSION }}-x86_64.AppImage
+          asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64.AppImage
+          asset_content_type: application/x-executable
       - uses: actions/upload-release-asset@latest
         env:
           GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
