@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.3.2
+
+- TBD
+
 ## 0.3.1
 
 - release MacOS builds as universal DMG
