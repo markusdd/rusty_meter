@@ -135,7 +135,8 @@ jobs:
         run: |
           rustup target add x86_64-apple-darwin aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
-          cargo build --release0release/rusty_meter \
+          cargo build --release --target aarch64-apple-darwin
+          lipo -create -output target/release/rusty_meter \
             target/x86_64-apple-darwin/release/rusty_meter \
             target/aarch64-apple-darwin/release/rusty_meter
           chmod +x target/release/rusty_meter
