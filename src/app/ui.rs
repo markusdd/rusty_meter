@@ -18,16 +18,20 @@ pub enum PlotTab {
 struct PlotTabViewer<'a> {
     values: &'a VecDeque<f64>,
     hist_values: &'a mut VecDeque<f64>,
-    reverse_graph: bool,
+    reverse_graph: &'a mut bool,
     graph_line_color: egui::Color32,
     hist_bar_color: egui::Color32,
-    mem_depth: usize,
+    mem_depth: &'a mut usize,
     curr_meas: f64,
     metermode: MeterMode,
     graph_config: &'a mut super::graph::GraphConfig,
     hist_collect_active: &'a mut bool,
     hist_collect_interval_ms: &'a mut u64,
-    hist_mem_depth: usize,
+    hist_mem_depth: &'a mut usize,
+    mem_depth_max: usize,
+    graph_update_interval_ms: &'a mut u64,
+    graph_update_interval_max: u64,
+    hist_mem_depth_max: usize,
 }
 
 impl<'a> TabViewer for PlotTabViewer<'a> {
@@ -45,9 +49,13 @@ impl<'a> TabViewer for PlotTabViewer<'a> {
             PlotTab::Graph => super::graph::show_line_graph(
                 ui,
                 self.values,
-                self.reverse_graph,
+                *self.reverse_graph,
                 self.graph_line_color,
                 self.mem_depth,
+                self.graph_update_interval_ms,
+                self.reverse_graph,
+                self.mem_depth_max,
+                self.graph_update_interval_max,
             ),
             PlotTab::Histogram => super::graph::show_histogram(
                 ui,
@@ -59,6 +67,7 @@ impl<'a> TabViewer for PlotTabViewer<'a> {
                 self.hist_collect_active,
                 self.hist_collect_interval_ms,
                 self.hist_mem_depth,
+                self.hist_mem_depth_max,
             ),
         }
     }
@@ -212,6 +221,20 @@ impl super::MyApp {
                 });
                 ui.add_space(16.0);
                 egui::widgets::global_theme_preference_buttons(ui);
+            });
+        });
+
+        egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                powered_by(ui);
+                ui.hyperlink_to(
+                    format!("Version: v{}", super::VERSION),
+                    format!(
+                        "https://github.com/markusdd/RustyMeter/releases/tag/v{}",
+                        super::VERSION
+                    ),
+                );
+                egui::warn_if_debug_build(ui);
             });
         });
 
@@ -676,80 +699,25 @@ impl super::MyApp {
                 let mut viewer = PlotTabViewer {
                     values: &self.values,
                     hist_values: &mut self.hist_values,
-                    reverse_graph: self.reverse_graph,
+                    reverse_graph: &mut self.reverse_graph,
                     graph_line_color: self.graph_line_color,
                     hist_bar_color: self.hist_bar_color,
-                    mem_depth: self.mem_depth,
+                    mem_depth: &mut self.mem_depth,
                     curr_meas: self.curr_meas,
                     metermode: self.metermode,
                     graph_config: &mut self.graph_config,
                     hist_collect_active: &mut self.hist_collect_active,
                     hist_collect_interval_ms: &mut self.hist_collect_interval_ms,
-                    hist_mem_depth: self.hist_mem_depth,
+                    hist_mem_depth: &mut self.hist_mem_depth,
+                    mem_depth_max: self.mem_depth_max,
+                    graph_update_interval_ms: &mut self.graph_update_interval_ms,
+                    graph_update_interval_max: self.graph_update_interval_max,
+                    hist_mem_depth_max: self.hist_mem_depth_max,
                 };
                 DockArea::new(&mut dock_state)
                     .style(Style::from_egui(ui.style()))
                     .show_inside(ui, &mut viewer);
             }
-
-            // Graph adjustments section with sliders and checkbox, placed directly under the graph
-            ui.vertical(|ui| {
-                ui.label("Graph Adjustments");
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::Slider::new(&mut self.mem_depth, 10..=self.mem_depth_max)
-                            .text("Memory Depth")
-                            .step_by(10.0)
-                            .clamping(SliderClamping::Always),
-                    );
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.graph_update_interval_ms,
-                            10..=self.graph_update_interval_max,
-                        )
-                        .text("Update Interval (ms)")
-                        .step_by(10.0)
-                        .clamping(SliderClamping::Always),
-                    );
-                    ui.checkbox(
-                        &mut self.reverse_graph,
-                        "Reverse Graph (most recent on left)",
-                    );
-                });
-                if self.graph_update_interval_ms != *self.graph_update_interval_shared.lock().unwrap()
-                {
-                    *self.graph_update_interval_shared.lock().unwrap() =
-                        self.graph_update_interval_ms;
-                }
-            });
-
-            ui.separator();
-
-            // Histogram memory depth slider, placed separately
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::Slider::new(&mut self.hist_mem_depth, 100..=self.hist_mem_depth_max)
-                            .text("Histogram Memory Depth")
-                            .step_by(100.0)
-                            .clamping(SliderClamping::Always),
-                    );
-                });
-            });
-
-            ui.separator();
-
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                powered_by(ui);
-                ui.hyperlink_to(
-                    format!("Version: v{}", super::VERSION),
-                    format!(
-                        "https://github.com/markusdd/RustyMeter/releases/tag/v{}",
-                        super::VERSION
-                    ),
-                );
-                egui::warn_if_debug_build(ui);
-            });
 
             // Show settings and recording windows
             self.show_settings(ctx);
