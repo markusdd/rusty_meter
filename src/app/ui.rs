@@ -1,11 +1,60 @@
-use egui::{FontFamily, FontId, SliderClamping, Stroke, Vec2};
+use egui::{FontFamily, FontId, SliderClamping, Vec2};
+use egui_dock::{DockArea, DockState, Style, TabViewer};
 use egui_dropdown::DropDownBox;
-use egui_plot::{Legend, Line, Plot, PlotPoints};
 use mio_serial::{DataBits, SerialPort, SerialPortBuilderExt};
 use std::collections::VecDeque;
 
 use crate::helpers::{format_measurement, powered_by};
 use crate::multimeter::{GenScpi, MeterMode, RangeCmd};
+
+// Enum to represent tab types
+#[derive(Clone, PartialEq)]
+pub enum PlotTab {
+    Graph,
+    Histogram,
+}
+
+// Tab viewer implementation for PlotTab
+struct PlotTabViewer<'a> {
+    values: &'a VecDeque<f64>,
+    hist_values: &'a mut VecDeque<f64>,
+    reverse_graph: bool,
+    graph_line_color: egui::Color32,
+    mem_depth: usize,
+    curr_meas: f64,
+    metermode: MeterMode,
+    graph_config: &'a mut super::graph::GraphConfig,
+}
+
+impl<'a> TabViewer for PlotTabViewer<'a> {
+    type Tab = PlotTab;
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        match tab {
+            PlotTab::Graph => "Graph".into(),
+            PlotTab::Histogram => "Histogram".into(),
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        match tab {
+            PlotTab::Graph => super::graph::show_line_graph(
+                ui,
+                self.values,
+                self.reverse_graph,
+                self.graph_line_color,
+                self.mem_depth,
+            ),
+            PlotTab::Histogram => super::graph::show_histogram(
+                ui,
+                self.hist_values,
+                self.curr_meas,
+                self.metermode,
+                self.graph_config,
+            ),
+        }
+    }
+}
 
 impl super::MyApp {
     /// Called by the framework to save state before shutdown.
@@ -43,6 +92,9 @@ impl super::MyApp {
                     }
                 });
             }
+            // Initialize dock state
+            let tabs = vec![PlotTab::Graph, PlotTab::Histogram];
+            self.plot_dock_state = DockState::new(tabs);
             self.is_init = true;
         }
 
@@ -61,6 +113,7 @@ impl super::MyApp {
                 if mode != self.metermode {
                     self.metermode = mode;
                     self.values = VecDeque::with_capacity(self.mem_depth);
+                    self.hist_values = VecDeque::with_capacity(self.mem_depth); // Reset histogram buffer
                     match mode {
                         MeterMode::Vdc => {
                             self.curr_unit = "VDC".to_owned();
@@ -115,12 +168,13 @@ impl super::MyApp {
             }
         }
 
-        // Handle graph updates and recording based on the configured interval
+        // Handle graph and histogram updates and recording based on the configured interval
         let current_time = ctx.input(|i| i.time); // Get current time in seconds
         let graph_interval = *self.graph_update_interval_shared.lock().unwrap() as f64 / 1000.0; // Convert ms to seconds
         if current_time - self.last_graph_update >= graph_interval {
             if !self.curr_meas.is_nan() {
                 self.values.push_back(self.curr_meas);
+                self.update_histogram(self.curr_meas); // Update histogram with new measurement
                 while self.values.len() > self.mem_depth {
                     self.values.pop_front();
                 }
@@ -607,35 +661,24 @@ impl super::MyApp {
 
             ui.separator();
 
-            ui.vertical(|ui| {
-                let values: Vec<f64> = self.values.make_contiguous().to_vec();
-                let points: Vec<f64> = if self.reverse_graph {
-                    values.into_iter().rev().collect()
-                } else {
-                    values
+            // Dock area for graph and histogram
+            {
+                // Scope to limit the mutable borrow of plot_dock_state
+                let mut dock_state = &mut self.plot_dock_state;
+                let mut viewer = PlotTabViewer {
+                    values: &self.values,
+                    hist_values: &mut self.hist_values,
+                    reverse_graph: self.reverse_graph,
+                    graph_line_color: self.graph_line_color,
+                    mem_depth: self.mem_depth,
+                    curr_meas: self.curr_meas,
+                    metermode: self.metermode,
+                    graph_config: &mut self.graph_config,
                 };
-                let line = Line::new(PlotPoints::from_ys_f64(&points))
-                    .stroke(Stroke::new(2.0, self.graph_line_color));
-                let plot = Plot::new("graph")
-                    .legend(Legend::default())
-                    .y_axis_min_width(4.0)
-                    .show_axes(true)
-                    .show_grid(true)
-                    .height(400.0);
-                plot.show(ui, |plot_ui| {
-                    // Get current bounds to base our adjustments on
-                    let current_bounds = plot_ui.plot_bounds();
-                    // Set exact x-axis bounds (same for both directions; reverse_graph affects data order)
-                    let new_bounds = egui_plot::PlotBounds::from_min_max(
-                        [0.0, current_bounds.min()[1]], // x=0 is most recent (if reversed) or oldest
-                        [self.mem_depth as f64, current_bounds.max()[1]], // x=mem_depth is oldest (if reversed) or most recent
-                    );
-                    plot_ui.set_plot_bounds(new_bounds);
-                    // Disable x-axis autoscaling, enable y-axis autoscaling
-                    plot_ui.set_auto_bounds([false, true]);
-                    plot_ui.line(line);
-                });
-            });
+                DockArea::new(&mut dock_state)
+                    .style(Style::from_egui(ui.style()))
+                    .show_inside(ui, &mut viewer);
+            }
 
             ui.separator();
 

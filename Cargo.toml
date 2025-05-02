@@ -16,10 +16,11 @@ eframe = { version = "0.31.1", default-features = false, features = [
     "wayland",       # for Linux  
 ] }
 egui-dropdown = "0.13.0"
+egui_dock = "0.16.0"
 image = { version = "0.25.6", features = ["jpeg", "png"] }
 egui_extras = { version = "0.31.1", features = ["all_loaders"] }
 epaint = "0.31.1"
-egui_plot = "0.31.0"
+egui_plot = "0.32.1"
 log = "0.4.27"
 reqwest = { version = "0.12.15", features = ["blocking"] }
 urlencoding = "2.1.3"

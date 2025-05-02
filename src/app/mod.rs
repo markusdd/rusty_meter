@@ -7,6 +7,7 @@ use std::{
 };
 
 use egui::{Color32, Context, FontData, FontDefinitions, FontFamily};
+use egui_dock::DockState;
 use mio::{Events, Poll};
 use mio_serial::{SerialPortInfo, SerialStream};
 use tokio::sync::{mpsc, oneshot};
@@ -14,6 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::multimeter::{MeterMode, RangeCmd, RateCmd, ScpiMode};
 
 // Submodules for split impl blocks
+mod graph;
 mod recording;
 mod serial;
 mod settings;
@@ -110,6 +112,8 @@ pub struct MyApp {
     #[serde(skip)]
     values: VecDeque<f64>,
     #[serde(skip)]
+    hist_values: VecDeque<f64>, // Buffer for histogram data
+    #[serde(skip)]
     poll: Poll,
     #[serde(skip)]
     events: Events,
@@ -155,6 +159,9 @@ pub struct MyApp {
     meas_count: u32, // Track measurement cycles for periodic FUNC? polling
     #[serde(skip)]
     last_record_time: f64, // Track last recording time for fixed interval
+    graph_config: graph::GraphConfig, // Graph configuration
+    #[serde(skip)]
+    plot_dock_state: DockState<ui::PlotTab>, // Dock state for plot tabs
 }
 
 // Enum to track connection state
@@ -187,6 +194,7 @@ impl Default for MyApp {
             readbuf: [0u8; 1024],
             portlist: VecDeque::with_capacity(11),
             values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
+            hist_values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1), // Initialize histogram buffer
             poll: Poll::new().unwrap(),
             events: Events::with_capacity(1),
             serial: None,
@@ -231,6 +239,8 @@ impl Default for MyApp {
             connection_error: None,                                 // No error initially
             meas_count: 0,         // Initialize measurement counter
             last_record_time: 0.0, // Initialize last recording time
+            graph_config: graph::GraphConfig::default(), // Default graph config
+            plot_dock_state: DockState::new(vec![]), // Initialize empty, populated in update
         }
     }
 }
@@ -352,6 +362,7 @@ impl MyApp {
             }
         }
         self.values = VecDeque::with_capacity(self.mem_depth);
+        self.hist_values = VecDeque::with_capacity(self.mem_depth); // Reset histogram buffer
         self.rangecmd = range_type.and_then(|rt| RangeCmd::new(&self.curr_meter, rt));
         self.curr_range = 0;
     }
@@ -371,6 +382,7 @@ impl MyApp {
         *device = "".to_owned(); // Clear device string
         self.curr_meas = f64::NAN; // Reset measurement
         self.values.clear(); // Clear graph data
+        self.hist_values.clear(); // Clear histogram data
         self.meas_count = 0; // Reset measurement counter
     }
 }

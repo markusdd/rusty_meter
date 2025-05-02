@@ -1,8 +1,12 @@
 # CHANGELOG
 
+## 0.4.0
+
+- histogram functionality, support docking and tabbing in graphing area
+
 ## 0.3.2
 
-- Offer Linux AppImage in addition to bare binary for proper icon/desktop integration with Wayland
+- offer Linux AppImage in addition to bare binary for proper icon/desktop integration with Wayland
 
 ## 0.3.1
 
