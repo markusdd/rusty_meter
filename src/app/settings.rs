@@ -78,6 +78,30 @@ impl super::MyApp {
                                 }
                             }
                         }
+                        ui.label("Maximum histogram memory depth:");
+                        let mut hist_max_depth_str = self.hist_mem_depth_max.to_string();
+                        if ui
+                            .add(
+                                TextEdit::singleline(&mut hist_max_depth_str)
+                                    .desired_width(800.0)
+                                    .hint_text("Enter maximum number of values for histogram"),
+                            )
+                            .changed()
+                        {
+                            if let Ok(new_max_depth) = hist_max_depth_str.parse::<usize>() {
+                                if new_max_depth >= 100 {
+                                    // Ensure minimum is at least 100
+                                    self.hist_mem_depth_max = new_max_depth;
+                                    // Clamp hist_mem_depth to new max if necessary
+                                    if self.hist_mem_depth > self.hist_mem_depth_max {
+                                        self.hist_mem_depth = self.hist_mem_depth_max;
+                                        while self.hist_values.len() > self.hist_mem_depth {
+                                            self.hist_values.pop_front();
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         ui.label("Maximum graph update interval (ms):");
                         let mut max_graph_interval_str = self.graph_update_interval_max.to_string();
                         if ui
@@ -109,6 +133,14 @@ impl super::MyApp {
                                 color_picker_color32(
                                     ui,
                                     &mut self.graph_line_color,
+                                    egui::color_picker::Alpha::Opaque,
+                                );
+                            });
+                            ui.vertical(|ui| {
+                                ui.label("Histogram bar color:");
+                                color_picker_color32(
+                                    ui,
+                                    &mut self.hist_bar_color,
                                     egui::color_picker::Alpha::Opaque,
                                 );
                             });

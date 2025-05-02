@@ -20,10 +20,14 @@ struct PlotTabViewer<'a> {
     hist_values: &'a mut VecDeque<f64>,
     reverse_graph: bool,
     graph_line_color: egui::Color32,
+    hist_bar_color: egui::Color32,
     mem_depth: usize,
     curr_meas: f64,
     metermode: MeterMode,
     graph_config: &'a mut super::graph::GraphConfig,
+    hist_collect_active: &'a mut bool,
+    hist_collect_interval_ms: &'a mut u64,
+    hist_mem_depth: usize,
 }
 
 impl<'a> TabViewer for PlotTabViewer<'a> {
@@ -51,6 +55,10 @@ impl<'a> TabViewer for PlotTabViewer<'a> {
                 self.curr_meas,
                 self.metermode,
                 self.graph_config,
+                self.hist_bar_color,
+                self.hist_collect_active,
+                self.hist_collect_interval_ms,
+                self.hist_mem_depth,
             ),
         }
     }
@@ -113,7 +121,7 @@ impl super::MyApp {
                 if mode != self.metermode {
                     self.metermode = mode;
                     self.values = VecDeque::with_capacity(self.mem_depth);
-                    self.hist_values = VecDeque::with_capacity(self.mem_depth); // Reset histogram buffer
+                    self.hist_values = VecDeque::with_capacity(self.hist_mem_depth); // Reset histogram buffer
                     match mode {
                         MeterMode::Vdc => {
                             self.curr_unit = "VDC".to_owned();
@@ -670,46 +678,61 @@ impl super::MyApp {
                     hist_values: &mut self.hist_values,
                     reverse_graph: self.reverse_graph,
                     graph_line_color: self.graph_line_color,
+                    hist_bar_color: self.hist_bar_color,
                     mem_depth: self.mem_depth,
                     curr_meas: self.curr_meas,
                     metermode: self.metermode,
                     graph_config: &mut self.graph_config,
+                    hist_collect_active: &mut self.hist_collect_active,
+                    hist_collect_interval_ms: &mut self.hist_collect_interval_ms,
+                    hist_mem_depth: self.hist_mem_depth,
                 };
                 DockArea::new(&mut dock_state)
                     .style(Style::from_egui(ui.style()))
                     .show_inside(ui, &mut viewer);
             }
 
-            ui.separator();
-
-            // Graph adjustments section with sliders and checkbox
+            // Graph adjustments section with sliders and checkbox, placed directly under the graph
             ui.vertical(|ui| {
                 ui.label("Graph Adjustments");
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::Slider::new(&mut self.mem_depth, 10..=self.mem_depth_max)
                             .text("Memory Depth")
-                            .step_by(10.0) // Step by 10 for smoother control
+                            .step_by(10.0)
                             .clamping(SliderClamping::Always),
                     );
-                    // Graph update interval slider to the right
-                    let graph_interval_slider = ui.add(
+                    ui.add(
                         egui::Slider::new(
                             &mut self.graph_update_interval_ms,
                             10..=self.graph_update_interval_max,
                         )
                         .text("Update Interval (ms)")
-                        .step_by(10.0) // Step by 10 for smoother control
+                        .step_by(10.0)
                         .clamping(SliderClamping::Always),
                     );
-                    if graph_interval_slider.changed() {
-                        // Update the shared value when the slider changes
-                        *self.graph_update_interval_shared.lock().unwrap() =
-                            self.graph_update_interval_ms;
-                    }
                     ui.checkbox(
                         &mut self.reverse_graph,
                         "Reverse Graph (most recent on left)",
+                    );
+                });
+                if self.graph_update_interval_ms != *self.graph_update_interval_shared.lock().unwrap()
+                {
+                    *self.graph_update_interval_shared.lock().unwrap() =
+                        self.graph_update_interval_ms;
+                }
+            });
+
+            ui.separator();
+
+            // Histogram memory depth slider, placed separately
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.hist_mem_depth, 100..=self.hist_mem_depth_max)
+                            .text("Histogram Memory Depth")
+                            .step_by(100.0)
+                            .clamping(SliderClamping::Always),
                     );
                 });
             });

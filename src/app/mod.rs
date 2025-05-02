@@ -25,6 +25,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const MEM_DEPTH_DEFAULT: usize = 100; // Default slider value
 const MEM_DEPTH_MAX_DEFAULT: usize = 2000; // Default maximum
+const HIST_MEM_DEPTH_DEFAULT: usize = 1000; // Default histogram memory depth
+const HIST_MEM_DEPTH_MAX_DEFAULT: usize = 10000; // Default maximum histogram memory depth
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum RecordingFormat {
@@ -65,6 +67,10 @@ pub struct MyApp {
     parity: bool,
     mem_depth: usize,     // Persistent, adjustable via slider
     mem_depth_max: usize, // Persistent, maximum for slider
+    hist_mem_depth: usize, // Persistent, histogram memory depth
+    hist_mem_depth_max: usize, // Persistent, maximum for histogram memory depth
+    hist_collect_interval_ms: u64, // Persistent, histogram collection interval
+    hist_collect_active: bool, // Persistent, whether histogram collection is active
     connect_on_startup: bool,
     value_debug: bool,
     poll_interval_ms: u64,
@@ -77,6 +83,7 @@ pub struct MyApp {
     curr_rate: usize,              // Persistent, current sampling rate index
     reverse_graph: bool,           // Persistent, whether to reverse graph direction
     graph_line_color: Color32,     // Persistent, color for graph line
+    hist_bar_color: Color32,       // Persistent, color for histogram bars
     measurement_font_color: Color32, // Persistent, color for measurement box font
     box_background_color: Color32, // Persistent, background color for measurement, mode, and option boxes
     #[serde(skip)]
@@ -152,6 +159,8 @@ pub struct MyApp {
     #[serde(skip)]
     last_graph_update: f64, // Track last graph update time
     #[serde(skip)]
+    last_hist_collect_time: f64, // Track last histogram collection time
+    #[serde(skip)]
     connection_state: ConnectionState, // New field to track connection status
     #[serde(skip)]
     connection_error: Option<String>, // New field to store connection error message
@@ -182,6 +191,10 @@ impl Default for MyApp {
             parity: false,
             mem_depth: MEM_DEPTH_DEFAULT, // Default slider value: 100
             mem_depth_max: MEM_DEPTH_MAX_DEFAULT, // Default max: 2000
+            hist_mem_depth: HIST_MEM_DEPTH_DEFAULT, // Default histogram memory depth: 1000
+            hist_mem_depth_max: HIST_MEM_DEPTH_MAX_DEFAULT, // Default max: 10000
+            hist_collect_interval_ms: 100, // Default to 100ms
+            hist_collect_active: false, // Default to stopped
             connect_on_startup: false,
             value_debug: false,
             curr_meter: "OWON XDM1041".to_owned(),
@@ -209,6 +222,7 @@ impl Default for MyApp {
             curr_range: 0,
             reverse_graph: false, // Default to right-to-left (most recent on right)
             graph_line_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
+            hist_bar_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             measurement_font_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             box_background_color: Color32::from_rgba_unmultiplied(0, 0, 0, 255), // Default to black
             recording_open: false, // Always start closed
@@ -235,6 +249,7 @@ impl Default for MyApp {
             poll_interval_shared: Arc::new(Mutex::new(20)),
             graph_update_interval_shared: Arc::new(Mutex::new(20)), // Default shared value to 20ms
             last_graph_update: 0.0,                                 // Initialize to 0
+            last_hist_collect_time: 0.0,                            // Initialize to 0
             connection_state: ConnectionState::Disconnected,        // Initially disconnected
             connection_error: None,                                 // No error initially
             meas_count: 0,         // Initialize measurement counter
@@ -362,7 +377,7 @@ impl MyApp {
             }
         }
         self.values = VecDeque::with_capacity(self.mem_depth);
-        self.hist_values = VecDeque::with_capacity(self.mem_depth); // Reset histogram buffer
+        self.hist_values = VecDeque::with_capacity(self.hist_mem_depth); // Reset histogram buffer
         self.rangecmd = range_type.and_then(|rt| RangeCmd::new(&self.curr_meter, rt));
         self.curr_range = 0;
     }
