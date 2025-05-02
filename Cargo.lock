@@ -3885,7 +3885,7 @@ checksum = "eded382c5f5f786b989652c49544c4877d9f015cc22e145a5ea8ea66c2921cd2"
 
 [[package]]
 name = "rusty_meter"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "arboard",
  "chrono",
