@@ -14,8 +14,8 @@ pub struct GraphConfig {
 impl Default for GraphConfig {
     fn default() -> Self {
         Self {
-            num_bins: 0,  // 0 means auto
-            max_bins: 10, // Default maximum bins
+            num_bins: 0,   // 0 means auto
+            max_bins: 100, // Default maximum bins
         }
     }
 }
@@ -43,41 +43,40 @@ pub fn show_line_graph(
         .legend(Legend::default())
         .y_axis_min_width(4.0)
         .show_axes(true)
-        .show_grid(true)
-        .height(400.0);
-    plot.show(ui, |plot_ui| {
-        // Get current bounds to base our adjustments on
-        let current_bounds = plot_ui.plot_bounds();
-        // Set exact x-axis bounds (same for both directions; reverse_graph affects data order)
-        let new_bounds = egui_plot::PlotBounds::from_min_max(
-            [0.0, current_bounds.min()[1]], // x=0 is most recent (if reversed) or oldest
-            [*mem_depth as f64, current_bounds.max()[1]], // x=mem_depth is oldest (if reversed) or most recent
-        );
-        plot_ui.set_plot_bounds(new_bounds);
-        // Disable x-axis autoscaling, enable y-axis autoscaling
-        plot_ui.set_auto_bounds([false, true]);
-        plot_ui.line(line);
-    });
+        .show_grid(true);
 
-    // Graph controls directly below the graph
-    ui.group(|ui| {
-        ui.vertical(|ui| {
-            ui.label("Graph Adjustments");
-            ui.horizontal(|ui| {
-                ui.add(
-                    Slider::new(mem_depth, 10..=mem_depth_max)
-                        .text("Memory Depth")
-                        .step_by(10.0)
-                        .clamping(SliderClamping::Always),
-                );
-                ui.add(
-                    Slider::new(graph_update_interval_ms, 10..=graph_update_interval_max)
-                        .text("Update Interval (ms)")
-                        .step_by(10.0)
-                        .clamping(SliderClamping::Always),
-                );
-                ui.checkbox(reverse_graph_mut, "Reverse Graph (most recent on left)");
-            });
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+        // Graph controls directly below the graph
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                Slider::new(mem_depth, 10..=mem_depth_max)
+                    .text("Memory Depth")
+                    .step_by(10.0)
+                    .clamping(SliderClamping::Always),
+            );
+            ui.add(
+                Slider::new(graph_update_interval_ms, 10..=graph_update_interval_max)
+                    .text("Update Interval (ms)")
+                    .step_by(10.0)
+                    .clamping(SliderClamping::Always),
+            );
+            ui.checkbox(reverse_graph_mut, "Reverse Graph (most recent on left)");
+        });
+        ui.label("Graph Adjustments");
+        ui.separator();
+        // The graph itself
+        plot.show(ui, |plot_ui| {
+            // Get current bounds to base our adjustments on
+            let current_bounds = plot_ui.plot_bounds();
+            // Set exact x-axis bounds (same for both directions; reverse_graph affects data order)
+            let new_bounds = egui_plot::PlotBounds::from_min_max(
+                [0.0, current_bounds.min()[1]], // x=0 is most recent (if reversed) or oldest
+                [*mem_depth as f64, current_bounds.max()[1]], // x=mem_depth is oldest (if reversed) or most recent
+            );
+            plot_ui.set_plot_bounds(new_bounds);
+            // Disable x-axis autoscaling, enable y-axis autoscaling
+            plot_ui.set_auto_bounds([false, true]);
+            plot_ui.line(line);
         });
     });
 }
@@ -168,10 +167,16 @@ pub fn show_histogram(
                     let count_f64 = count as f64;
                     // Center the bar at i + 0.5 in normalized coordinates
                     let bar_center = i as f64 + 0.5;
+                    // Directly initialize stroke based on theme
+                    let stroke = if ui.ctx().theme().default_visuals().dark_mode {
+                        egui::Stroke::new(0.5, Color32::from_rgb(255, 255, 255))
+                    } else {
+                        egui::Stroke::new(0.5, Color32::from_rgb(0, 0, 0))
+                    };
                     Bar::new(bar_center, count_f64)
                         .width(display_bar_width * 0.95) // Slight gap between bars
                         .fill(hist_bar_color)
-                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(255, 255, 255)))
+                        .stroke(stroke)
                 })
                 .collect();
 
@@ -186,7 +191,6 @@ pub fn show_histogram(
         };
 
     // Use bottom-up layout to place controls at bottom and plot above
-    //ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
         // Diagnostic labels (bottom to top due to bottom_up layout)
         if num_bins > 0 {
@@ -206,29 +210,9 @@ pub fn show_histogram(
         ));
         ui.label(format!("Bin width (data units): {:.6}", bin_width));
         ui.label(format!("Number of bins: {}", num_bins));
+        ui.separator();
 
-        // Collection interval input
-        ui.horizontal(|ui| {
-            ui.label("Collection Interval (ms): ");
-            let mut interval_str = hist_collect_interval_ms.to_string();
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut interval_str)
-                        .desired_width(100.0)
-                        .hint_text("Enter interval in ms"),
-                )
-                .changed()
-            {
-                if let Ok(new_interval) = interval_str.parse::<u64>() {
-                    if new_interval > 0 {
-                        *hist_collect_interval_ms = new_interval;
-                    }
-                }
-            }
-        });
-
-        ui.label("Histogram Adjustments");
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // Histogram memory depth slider
             ui.add(
                 Slider::new(hist_mem_depth, 100..=hist_mem_depth_max)
@@ -266,8 +250,26 @@ pub fn show_histogram(
                     .step_by(1.0)
                     .clamping(SliderClamping::Always),
             );
+            let mut interval_str = hist_collect_interval_ms.to_string();
+
+            // Collection interval
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut interval_str)
+                        .desired_width(100.0)
+                        .hint_text("Collection Interval (ms)"),
+                )
+                .changed()
+            {
+                if let Ok(new_interval) = interval_str.parse::<u64>() {
+                    if new_interval > 0 {
+                        *hist_collect_interval_ms = new_interval;
+                    }
+                }
+            }
+            ui.label("Collection Interval (ms)");
         });
-        //});
+        ui.label("Histogram Adjustments");
         ui.separator();
 
         // Plot the histogram above controls, taking remaining space
@@ -289,7 +291,7 @@ pub fn show_histogram(
             };
             let new_bounds = egui_plot::PlotBounds::from_min_max(x_bounds, y_bounds);
             plot_ui.set_plot_bounds(new_bounds);
-            // Disable auto-scaling to ensure bounds are respected
+            // Auto-scale for now as for some reason the manual scaling does not work
             plot_ui.set_auto_bounds([true, true]);
             plot_ui.bar_chart(bar_chart);
         });

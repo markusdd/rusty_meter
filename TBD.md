@@ -2,8 +2,7 @@
 
 ## Features
 
-- scroll direction
-- spreadsheet export
+- N/A right now
 
 ## Modes
 
