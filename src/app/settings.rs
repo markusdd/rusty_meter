@@ -102,6 +102,27 @@ impl super::MyApp {
                                 }
                             }
                         }
+                        ui.label("Maximum histogram bins:");
+                        let mut max_bins_str = self.graph_config.max_bins.to_string();
+                        if ui
+                            .add(
+                                TextEdit::singleline(&mut max_bins_str)
+                                    .desired_width(800.0)
+                                    .hint_text("Enter maximum number of bins for histogram"),
+                            )
+                            .changed()
+                        {
+                            if let Ok(new_max_bins) = max_bins_str.parse::<usize>() {
+                                if new_max_bins >= 10 {
+                                    // Ensure minimum is at least 10
+                                    self.graph_config.max_bins = new_max_bins;
+                                    // Clamp num_bins to new max if necessary
+                                    if self.graph_config.num_bins > self.graph_config.max_bins {
+                                        self.graph_config.num_bins = self.graph_config.max_bins;
+                                    }
+                                }
+                            }
+                        }
                         ui.label("Maximum graph update interval (ms):");
                         let mut max_graph_interval_str = self.graph_update_interval_max.to_string();
                         if ui
