@@ -1,4 +1,4 @@
-use egui::{Color32, Slider, SliderClamping};
+use egui::{Color32, Slider, SliderClamping, Vec2};
 use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints};
 use std::collections::VecDeque;
 
@@ -99,118 +99,126 @@ pub fn show_histogram(
 
     // Create bar chart data
     let hist_values_vec: Vec<f64> = hist_values.iter().copied().collect();
-    let (bar_chart, max_count, num_bins, bin_width, range_start, range_end) =
-        if hist_values_vec.is_empty() {
-            (
-                BarChart::new("Histogram".to_string(), vec![]),
-                0.0,
-                0,
-                0.0,
-                0.0,
-                0.0,
-            )
-        } else {
-            // Calculate min and max for binning
-            let (min, max) = hist_values_vec
-                .iter()
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), &x| {
-                    (min.min(x), max.max(x))
-                });
-            // Ensure valid range, handle single-value case
-            let range_width = if min == max {
-                if min == 0.0 {
-                    1.0 // Avoid zero range for zero values
-                } else {
-                    min.abs() * 0.1 // 10% of value for single value
-                }
+    let (bar_chart, max_count, num_bins, bin_width, min, max) = if hist_values_vec.is_empty() {
+        (
+            BarChart::new("Histogram (0 values, bin width: 0)".to_string(), vec![]),
+            0.0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+        )
+    } else {
+        // Calculate min and max for binning
+        let (min, max) = hist_values_vec
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), &x| {
+                (min.min(x), max.max(x))
+            });
+        // Ensure valid range, handle single-value case
+        let range_width = if min == max {
+            if min == 0.0 {
+                1.0 // Avoid zero range for zero values
             } else {
-                max - min
-            };
-            let range_start = if min == max {
-                min - range_width / 2.0
-            } else {
-                min
-            };
-            let range_end = range_start + range_width;
-
-            // Determine number of bins
-            let num_bins = if graph_config.num_bins == 0 {
-                // Auto-bin using square root rule, capped at max_bins
-                let sqrt_bins = (hist_values_vec.len() as f64).sqrt().ceil() as usize;
-                sqrt_bins.min(graph_config.max_bins).max(1) // Ensure at least one bin
-            } else {
-                graph_config.num_bins.max(1) // Ensure at least one bin
-            };
-
-            // Calculate bin width in data units
-            let bin_width = range_width / num_bins as f64;
-
-            // Create bins
-            let mut counts = vec![0; num_bins];
-            for &value in &hist_values_vec {
-                if value >= range_start && value <= range_end {
-                    let bin_index = ((value - range_start) / bin_width).floor() as usize;
-                    let bin_index = bin_index.min(num_bins - 1); // Clamp to last bin
-                    counts[bin_index] += 1;
-                }
+                min.abs() * 0.1 // 10% of value for single value
             }
-
-            // Compute max_count separately
-            let max_count = *counts.iter().max().unwrap_or(&0) as f64;
-
-            // Create bars in normalized canvas coordinates (0 to num_bins)
-            let display_bar_width = 1.0; // Width of 1.0 in normalized units
-            let bars: Vec<Bar> = counts
-                .into_iter()
-                .enumerate()
-                .map(|(i, count)| {
-                    let count_f64 = count as f64;
-                    // Center the bar at i + 0.5 in normalized coordinates
-                    let bar_center = i as f64 + 0.5;
-                    // Directly initialize stroke based on theme
-                    let stroke = if ui.ctx().theme().default_visuals().dark_mode {
-                        egui::Stroke::new(0.5, Color32::from_rgb(255, 255, 255))
-                    } else {
-                        egui::Stroke::new(0.5, Color32::from_rgb(0, 0, 0))
-                    };
-                    Bar::new(bar_center, count_f64)
-                        .width(display_bar_width * 0.95) // Slight gap between bars
-                        .fill(hist_bar_color)
-                        .stroke(stroke)
-                })
-                .collect();
-
-            (
-                BarChart::new("Histogram".to_string(), bars).color(hist_bar_color),
-                max_count,
-                num_bins,
-                bin_width,
-                range_start,
-                range_end,
-            )
+        } else {
+            max - min
         };
+        let range_start = if min == max {
+            min - range_width / 2.0
+        } else {
+            min
+        };
+        let range_end = range_start + range_width;
+
+        // Determine number of bins
+        let num_bins = if graph_config.num_bins == 0 {
+            // Auto-bin using square root rule, capped at max_bins
+            let sqrt_bins = (hist_values_vec.len() as f64).sqrt().ceil() as usize;
+            sqrt_bins.min(graph_config.max_bins).max(1) // Ensure at least one bin
+        } else {
+            graph_config.num_bins.max(1) // Ensure at least one bin
+        };
+
+        // Calculate bin width in data units
+        let bin_width = range_width / num_bins as f64;
+
+        // Create bins
+        let mut counts = vec![0; num_bins];
+        for &value in &hist_values_vec {
+            if value >= range_start && value <= range_end {
+                let bin_index = ((value - range_start) / bin_width).floor() as usize;
+                let bin_index = bin_index.min(num_bins - 1); // Clamp to last bin
+                counts[bin_index] += 1;
+            }
+        }
+
+        // Compute max_count separately
+        let max_count = *counts.iter().max().unwrap_or(&0) as f64;
+
+        // Format bin width for legend
+        let (formatted_bin_width, bin_width_unit) =
+            crate::helpers::format_measurement(bin_width, 10, 1_000_000.0, 0.0001, &metermode);
+        let chart_name = format!(
+            "  Samples: {}\nBin Width: {} {}\n      Min: {}\n      Max: {}",
+            hist_values_vec.len(),
+            formatted_bin_width.trim_start(),
+            bin_width_unit,
+            min,
+            max
+        );
+
+        // Create bars in normalized canvas coordinates (0 to num_bins)
+        let display_bar_width = 1.0; // Width of 1.0 in normalized units
+        let bars: Vec<Bar> = counts
+            .into_iter()
+            .enumerate()
+            .map(|(i, count)| {
+                let count_f64 = count as f64;
+                // Center the bar at i + 0.5 in normalized coordinates
+                let bar_center = i as f64 + 0.5;
+                // Directly initialize stroke based on theme
+                let stroke = if ui.ctx().theme().default_visuals().dark_mode {
+                    egui::Stroke::new(0.5, Color32::from_rgb(255, 255, 255))
+                } else {
+                    egui::Stroke::new(0.5, Color32::from_rgb(0, 0, 0))
+                };
+                Bar::new(bar_center, count_f64)
+                    .width(display_bar_width * 0.95) // Slight gap between bars
+                    .fill(hist_bar_color)
+                    .stroke(stroke)
+            })
+            .collect();
+
+        (
+            BarChart::new(chart_name, bars).color(hist_bar_color),
+            max_count,
+            num_bins,
+            bin_width,
+            min,
+            max,
+        )
+    };
 
     // Use bottom-up layout to place controls at bottom and plot above
     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
         // Diagnostic labels (bottom to top due to bottom_up layout)
-        if num_bins > 0 {
-            let bin_ranges: Vec<String> = (0..num_bins)
-                .map(|i| {
-                    let bin_start = range_start + i as f64 * bin_width;
-                    let bin_end = bin_start + bin_width;
-                    format!("Bin {}: {:.2} to {:.2}", i, bin_start, bin_end)
-                })
-                .collect();
-            ui.label(format!("Bin ranges: {:?}", bin_ranges));
-        }
-        ui.label(format!("Max count: {}", max_count));
-        ui.label(format!(
-            "Data range: {:.2} to {:.2}",
-            range_start, range_end
-        ));
-        ui.label(format!("Bin width (data units): {:.6}", bin_width));
-        ui.label(format!("Number of bins: {}", num_bins));
-        ui.separator();
+        // if num_bins > 0 {
+        //     let bin_ranges: Vec<String> = (0..num_bins)
+        //         .map(|i| {
+        //             let bin_start = range_start + i as f64 * bin_width;
+        //             let bin_end = bin_start + bin_width;
+        //             format!("Bin {}: {:.2} to {:.2}", i, bin_start, bin_end)
+        //         })
+        //         .collect();
+        //     ui.label(format!("Bin ranges: {:?}", bin_ranges));
+        // }
+        // ui.label(format!("Max count: {}", max_count));
+        // ui.label(format!("Data range: {:.2} to {:.2}", min, max));
+        // ui.label(format!("Bin width (data units): {:.6}", bin_width));
+        // ui.label(format!("Number of bins: {}", num_bins));
+        // ui.separator();
 
         ui.horizontal_wrapped(|ui| {
             // Histogram memory depth slider
@@ -278,20 +286,17 @@ pub fn show_histogram(
             .show_grid(true)
             .y_axis_label(format!("Count ({})", display_unit))
             .x_axis_label("Bin Index")
-            .allow_scroll(false); // Prevent scrolling to keep bins stable
+            .allow_scroll(false) // Prevent scrolling to keep bins stable
+            .default_y_bounds(-0.1, 1.0)
+            .include_y(max_count * 1.2)
+            .legend(
+                Legend::default()
+                    .position(egui_plot::Corner::RightTop)
+                    .text_style(egui::TextStyle::Monospace),
+            );
 
         plot.show(ui, |plot_ui| {
-            // Always set plot bounds, even if data is empty
-            let padding = num_bins as f64 * 0.05; // Scale padding with num_bins
-            let x_bounds = [-padding, num_bins as f64 + padding];
-            let y_bounds = if max_count == 0.0 {
-                [-0.5, 1.0] // Avoid zero height plot
-            } else {
-                [-0.5, max_count * 1.1] // 10% padding on top
-            };
-            let new_bounds = egui_plot::PlotBounds::from_min_max(x_bounds, y_bounds);
-            plot_ui.set_plot_bounds(new_bounds);
-            // Auto-scale for now as for some reason the manual scaling does not work
+            // Auto-scale x, do y manually to leave space for legend
             plot_ui.set_auto_bounds([true, true]);
             plot_ui.bar_chart(bar_chart);
         });
