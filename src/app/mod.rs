@@ -65,12 +65,12 @@ pub struct MyApp {
     bits: u32,
     stop_bits: u32,
     parity: bool,
-    mem_depth: usize,     // Persistent, adjustable via slider
-    mem_depth_max: usize, // Persistent, maximum for slider
-    hist_mem_depth: usize, // Persistent, histogram memory depth
-    hist_mem_depth_max: usize, // Persistent, maximum for histogram memory depth
+    mem_depth: usize,              // Persistent, adjustable via slider
+    mem_depth_max: usize,          // Persistent, maximum for slider
+    hist_mem_depth: usize,         // Persistent, histogram memory depth
+    hist_mem_depth_max: usize,     // Persistent, maximum for histogram memory depth
     hist_collect_interval_ms: u64, // Persistent, histogram collection interval
-    hist_collect_active: bool, // Persistent, whether histogram collection is active
+    hist_collect_active: bool,     // Persistent, whether histogram collection is active
     connect_on_startup: bool,
     value_debug: bool,
     poll_interval_ms: u64,
@@ -194,7 +194,7 @@ impl Default for MyApp {
             hist_mem_depth: HIST_MEM_DEPTH_DEFAULT, // Default histogram memory depth: 1000
             hist_mem_depth_max: HIST_MEM_DEPTH_MAX_DEFAULT, // Default max: 10000
             hist_collect_interval_ms: 100, // Default to 100ms
-            hist_collect_active: false, // Default to stopped
+            hist_collect_active: false,   // Default to stopped
             connect_on_startup: false,
             value_debug: false,
             curr_meter: "OWON XDM1041".to_owned(),
