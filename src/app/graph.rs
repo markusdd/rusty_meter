@@ -102,7 +102,7 @@ pub fn show_histogram(
 
     // Create bar chart data
     let hist_values_vec: Vec<f64> = hist_values.iter().copied().collect();
-    let (bar_chart, max_count, num_bins, bin_width, range_start, range_end) = if hist_values_vec
+    let (bar_chart, max_count, _num_bins, _bin_width, _range_start, _range_end) = if hist_values_vec
         .is_empty()
     {
         (
