@@ -102,7 +102,9 @@ pub fn show_histogram(
 
     // Create bar chart data
     let hist_values_vec: Vec<f64> = hist_values.iter().copied().collect();
-    let (bar_chart, max_count, _num_bins, _bin_width, _min, _max) = if hist_values_vec.is_empty() {
+    let (bar_chart, max_count, num_bins, bin_width, range_start, range_end) = if hist_values_vec
+        .is_empty()
+    {
         (
             BarChart::new("Histogram (0 values, bin width: 0)".to_string(), vec![]),
             0.0,
@@ -194,13 +196,38 @@ pub fn show_histogram(
             })
             .collect();
 
+        // Define element formatter for hover tooltip
+        let formatter = Box::new(move |bar: &Bar, _chart: &BarChart| {
+            // Calculate bin index from bar center (subtract 0.5 to get zero-based index)
+            let bin_index = (bar.argument - 0.5).floor() as usize;
+            // Calculate bin range
+            let bin_start = range_start + bin_index as f64 * bin_width;
+            let bin_end = bin_start + bin_width;
+            // Format bin start and end using the same formatting as measurements
+            let (formatted_start, _) =
+                crate::helpers::format_measurement(bin_start, 10, 1_000_000.0, 0.0001, &metermode);
+            let (formatted_end, _) =
+                crate::helpers::format_measurement(bin_end, 10, 1_000_000.0, 0.0001, &metermode);
+            // Sample count is the bar's value (height)
+            let sample_count = bar.value as usize;
+            format!(
+                "Bin Range: {} to {} {}\nSamples: {}",
+                formatted_start.trim_start(),
+                formatted_end.trim_start(),
+                display_unit,
+                sample_count
+            )
+        });
+
         (
-            BarChart::new(chart_name, bars).color(hist_bar_color),
+            BarChart::new(chart_name, bars)
+                .color(hist_bar_color)
+                .element_formatter(formatter),
             max_count,
             num_bins,
             bin_width,
-            min,
-            max,
+            range_start,
+            range_end,
         )
     };
 
