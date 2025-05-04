@@ -4,6 +4,10 @@
 
 - histogram functionality, support docking and tabbing in graphing area
 
+This sounds small, but is actually a big upgrade to the graphing functionality of this app.
+You can freely arrange the two graphs tabs as overlapping tabs, next to each other, or vertically stacked.
+Just grab the tab and start moving it.
+
 ## 0.3.2
 
 - offer Linux AppImage in addition to bare binary for proper icon/desktop integration with Wayland

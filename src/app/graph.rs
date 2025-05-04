@@ -20,6 +20,7 @@ impl Default for GraphConfig {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn show_line_graph(
     ui: &mut egui::Ui,
     values: &VecDeque<f64>,
@@ -84,6 +85,7 @@ pub fn show_line_graph(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn show_histogram(
     ui: &mut egui::Ui,
     hist_values: &mut VecDeque<f64>,
