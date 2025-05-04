@@ -64,7 +64,7 @@ jobs:
             dnf groupinstall -y "Development Tools" &&
             dnf install -y curl clang clang-devel libxkbcommon-devel mesa-libGL-devel libX11-devel \
                            wayland-devel libpng-devel libjpeg-devel openssl-devel pkgconf-pkg-config &&
-            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.82.0 &&
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.84.0 &&
             source $HOME/.cargo/env &&
             rustc --version &&
             ls -l /usr/lib64/libclang* &&

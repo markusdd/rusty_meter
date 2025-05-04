@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.4.1
+
+- move project to rust 1.84.0 (needed for egui_plot fixes)
+
 ## 0.4.0
 
 - histogram functionality, support docking and tabbing in graphing area
@@ -7,6 +11,8 @@
 This sounds small, but is actually a big upgrade to the graphing functionality of this app.
 You can freely arrange the two graphs tabs as overlapping tabs, next to each other, or vertically stacked.
 Just grab the tab and start moving it.
+
+You can customize the chart and measurement box font color under File -> Settings.
 
 ## 0.3.2
 
