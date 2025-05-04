@@ -35,7 +35,7 @@ struct PlotTabViewer<'a> {
     curr_unit: &'a str,
 }
 
-impl<'a> TabViewer for PlotTabViewer<'a> {
+impl TabViewer for PlotTabViewer<'_> {
     type Tab = PlotTab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
