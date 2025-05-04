@@ -32,6 +32,7 @@ struct PlotTabViewer<'a> {
     graph_update_interval_ms: &'a mut u64,
     graph_update_interval_max: u64,
     hist_mem_depth_max: usize,
+    curr_unit: &'a str,
 }
 
 impl<'a> TabViewer for PlotTabViewer<'a> {
@@ -56,6 +57,7 @@ impl<'a> TabViewer for PlotTabViewer<'a> {
                 self.reverse_graph,
                 self.mem_depth_max,
                 self.graph_update_interval_max,
+                self.curr_unit,
             ),
             PlotTab::Histogram => super::graph::show_histogram(
                 ui,
@@ -713,6 +715,7 @@ impl super::MyApp {
                     graph_update_interval_ms: &mut self.graph_update_interval_ms,
                     graph_update_interval_max: self.graph_update_interval_max,
                     hist_mem_depth_max: self.hist_mem_depth_max,
+                    curr_unit: &self.curr_unit,
                 };
                 DockArea::new(dock_state)
                     .style(Style::from_egui(ui.style()))

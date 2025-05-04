@@ -30,6 +30,7 @@ pub fn show_line_graph(
     reverse_graph_mut: &mut bool,
     mem_depth_max: usize,
     graph_update_interval_max: u64,
+    curr_unit: &str,
 ) {
     let values: Vec<f64> = values.iter().copied().collect();
     let points: Vec<f64> = if reverse_graph {
@@ -37,10 +38,10 @@ pub fn show_line_graph(
     } else {
         values
     };
-    let line = Line::new("Graph", PlotPoints::from_ys_f64(&points))
+    let line = Line::new(curr_unit, PlotPoints::from_ys_f64(&points))
         .stroke(egui::Stroke::new(2.0, graph_line_color));
     let plot = Plot::new("graph")
-        .legend(Legend::default())
+        .legend(Legend::default().text_style(egui::TextStyle::Monospace))
         .y_axis_min_width(4.0)
         .show_axes(true)
         .show_grid(true);
