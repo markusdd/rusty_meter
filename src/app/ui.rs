@@ -695,7 +695,7 @@ impl super::MyApp {
             // Dock area for graph and histogram
             {
                 // Scope to limit the mutable borrow of plot_dock_state
-                let mut dock_state = &mut self.plot_dock_state;
+                let dock_state = &mut self.plot_dock_state;
                 let mut viewer = PlotTabViewer {
                     values: &self.values,
                     hist_values: &mut self.hist_values,
@@ -714,7 +714,7 @@ impl super::MyApp {
                     graph_update_interval_max: self.graph_update_interval_max,
                     hist_mem_depth_max: self.hist_mem_depth_max,
                 };
-                DockArea::new(&mut dock_state)
+                DockArea::new(dock_state)
                     .style(Style::from_egui(ui.style()))
                     .show_inside(ui, &mut viewer);
             }

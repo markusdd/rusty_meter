@@ -1,4 +1,4 @@
-use egui::{Color32, Slider, SliderClamping, Vec2};
+use egui::{Color32, Slider, SliderClamping};
 use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints};
 use std::collections::VecDeque;
 
@@ -99,7 +99,7 @@ pub fn show_histogram(
 
     // Create bar chart data
     let hist_values_vec: Vec<f64> = hist_values.iter().copied().collect();
-    let (bar_chart, max_count, num_bins, bin_width, min, max) = if hist_values_vec.is_empty() {
+    let (bar_chart, max_count, _num_bins, _bin_width, _min, _max) = if hist_values_vec.is_empty() {
         (
             BarChart::new("Histogram (0 values, bin width: 0)".to_string(), vec![]),
             0.0,
