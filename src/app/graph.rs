@@ -43,6 +43,8 @@ pub fn show_line_graph(
     let plot = Plot::new("graph")
         .legend(Legend::default().text_style(egui::TextStyle::Monospace))
         .y_axis_min_width(4.0)
+        .y_axis_label(curr_unit)
+        .x_axis_label("Samples")
         .show_axes(true)
         .show_grid(true);
 
@@ -285,7 +287,7 @@ pub fn show_histogram(
         let plot = Plot::new("histogram")
             .show_axes(true)
             .show_grid(true)
-            .y_axis_label(format!("Count ({})", display_unit))
+            .y_axis_label("Count")
             .x_axis_label("Bin Index")
             .allow_scroll(false) // Prevent scrolling to keep bins stable
             .default_y_bounds(-0.1, 1.0)
