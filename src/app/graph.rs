@@ -1,5 +1,8 @@
-use egui::{Color32, Slider, SliderClamping};
-use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints};
+use egui::{Color32, Frame, Pos2, Slider, SliderClamping, Stroke};
+use egui_plot::{
+    Bar, BarChart, ClosestElem, Cursor, Legend, Line, Plot, PlotBounds, PlotConfig, PlotGeometry,
+    PlotItem, PlotPoints, PlotTransform,
+};
 use std::collections::VecDeque;
 
 use crate::multimeter::MeterMode;
@@ -17,6 +20,136 @@ impl Default for GraphConfig {
             num_bins: 0,   // 0 means auto
             max_bins: 100, // Default maximum bins
         }
+    }
+}
+
+// Lightweight wrapper for BarChart to customize on_hover
+struct CustomBarChart {
+    inner: BarChart,
+    range_start: f64,
+    bin_width: f64,
+    num_bins: usize,
+    display_unit: String,
+    metermode: MeterMode,
+    bars: Vec<Bar>, // Store bars separately for access
+}
+
+impl CustomBarChart {
+    pub fn new(
+        name: impl Into<String>,
+        bars: Vec<Bar>,
+        range_start: f64,
+        bin_width: f64,
+        num_bins: usize,
+        display_unit: String,
+        metermode: MeterMode,
+    ) -> Self {
+        Self {
+            inner: BarChart::new(name, bars.clone()),
+            range_start,
+            bin_width,
+            num_bins,
+            display_unit,
+            metermode,
+            bars,
+        }
+    }
+
+    pub fn color(self, color: impl Into<Color32>) -> Self {
+        Self {
+            inner: self.inner.color(color),
+            ..self
+        }
+    }
+}
+
+impl PlotItem for CustomBarChart {
+    fn shapes(&self, ui: &egui::Ui, transform: &PlotTransform, shapes: &mut Vec<egui::Shape>) {
+        self.inner.shapes(ui, transform, shapes);
+    }
+
+    fn initialize(&mut self, x_range: std::ops::RangeInclusive<f64>) {
+        self.inner.initialize(x_range);
+    }
+
+    fn color(&self) -> Color32 {
+        PlotItem::color(&self.inner)
+    }
+
+    fn geometry(&self) -> PlotGeometry<'_> {
+        self.inner.geometry()
+    }
+
+    fn bounds(&self) -> PlotBounds {
+        self.inner.bounds()
+    }
+
+    fn base(&self) -> &egui_plot::items::PlotItemBase {
+        self.inner.base()
+    }
+
+    fn base_mut(&mut self) -> &mut egui_plot::items::PlotItemBase {
+        self.inner.base_mut()
+    }
+
+    fn on_hover(
+        &self,
+        elem: ClosestElem,
+        shapes: &mut Vec<egui::Shape>,
+        cursors: &mut Vec<Cursor>,
+        plot: &PlotConfig<'_>,
+        _label_formatter: &egui_plot::LabelFormatter<'_>,
+    ) {
+        // Get the bar index from ClosestElem
+        let bin_index = elem.index;
+        if bin_index >= self.num_bins {
+            return;
+        }
+
+        // Calculate bin range
+        let bin_start = self.range_start + bin_index as f64 * self.bin_width;
+        let bin_end = bin_start + self.bin_width;
+
+        // Format bin start and end using measurement formatting
+        let (formatted_start, _) =
+            crate::helpers::format_measurement(bin_start, 10, 1_000_000.0, 0.0001, &self.metermode);
+        let (formatted_end, _) =
+            crate::helpers::format_measurement(bin_end, 10, 1_000_000.0, 0.0001, &self.metermode);
+
+        // Sample count from the stored bars
+        let sample_count = self.bars.get(bin_index).map_or(0, |bar| bar.value as usize);
+
+        // Create tooltip text
+        let tooltip_text = format!(
+            "Bin Range: {} to {} {}\nSamples: {}",
+            formatted_start.trim_start(),
+            formatted_end.trim_start(),
+            self.display_unit,
+            sample_count
+        );
+
+        // Show styled tooltip
+        let tooltip = egui::Area::new(egui::Id::new("histogram_tooltip"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(
+                plot.ui
+                    .input(|i| i.pointer.hover_pos().unwrap_or(Pos2::ZERO)),
+            )
+            .constrain(true);
+
+        tooltip.show(plot.ui.ctx(), |ui| {
+            Frame::popup(ui.style())
+                .fill(Color32::from_black_alpha(240))
+                .stroke(Stroke::new(1.0, Color32::GRAY))
+                .show(ui, |ui| {
+                    ui.set_max_width(200.0); // Limit tooltip width
+                    ui.label(
+                        egui::RichText::new(tooltip_text)
+                            .color(Color32::WHITE)
+                            .font(egui::FontId::proportional(14.0)),
+                    );
+                });
+        });
     }
 }
 
@@ -102,134 +235,125 @@ pub fn show_histogram(
 
     // Create bar chart data
     let hist_values_vec: Vec<f64> = hist_values.iter().copied().collect();
-    let (bar_chart, max_count, _num_bins, _bin_width, _range_start, _range_end) = if hist_values_vec
-        .is_empty()
-    {
-        (
-            BarChart::new("Histogram (0 values, bin width: 0)".to_string(), vec![]),
-            0.0,
-            0,
-            0.0,
-            0.0,
-            0.0,
-        )
-    } else {
-        // Calculate min and max for binning
-        let (min, max) = hist_values_vec
-            .iter()
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), &x| {
-                (min.min(x), max.max(x))
-            });
-        // Ensure valid range, handle single-value case
-        let range_width = if min == max {
-            if min == 0.0 {
-                1.0 // Avoid zero range for zero values
-            } else {
-                min.abs() * 0.1 // 10% of value for single value
-            }
-        } else {
-            max - min
-        };
-        let range_start = if min == max {
-            min - range_width / 2.0
-        } else {
-            min
-        };
-        let range_end = range_start + range_width;
-
-        // Determine number of bins
-        let num_bins = if graph_config.num_bins == 0 {
-            // Auto-bin using square root rule, capped at max_bins
-            let sqrt_bins = (hist_values_vec.len() as f64).sqrt().ceil() as usize;
-            sqrt_bins.min(graph_config.max_bins).max(1) // Ensure at least one bin
-        } else {
-            graph_config.num_bins.max(1) // Ensure at least one bin
-        };
-
-        // Calculate bin width in data units
-        let bin_width = range_width / num_bins as f64;
-
-        // Create bins
-        let mut counts = vec![0; num_bins];
-        for &value in &hist_values_vec {
-            if value >= range_start && value <= range_end {
-                let bin_index = ((value - range_start) / bin_width).floor() as usize;
-                let bin_index = bin_index.min(num_bins - 1); // Clamp to last bin
-                counts[bin_index] += 1;
-            }
-        }
-
-        // Compute max_count separately
-        let max_count = *counts.iter().max().unwrap_or(&0) as f64;
-
-        // Format bin width for legend
-        let (formatted_bin_width, bin_width_unit) =
-            crate::helpers::format_measurement(bin_width, 10, 1_000_000.0, 0.0001, &metermode);
-        let chart_name = format!(
-            "  Samples: {}\nBin Width: {} {}\n      Min: {}\n      Max: {}",
-            hist_values_vec.len(),
-            formatted_bin_width.trim_start(),
-            bin_width_unit,
-            min,
-            max
-        );
-
-        // Create bars in normalized canvas coordinates (0 to num_bins)
-        let display_bar_width = 1.0; // Width of 1.0 in normalized units
-        let bars: Vec<Bar> = counts
-            .into_iter()
-            .enumerate()
-            .map(|(i, count)| {
-                let count_f64 = count as f64;
-                // Center the bar at i + 0.5 in normalized coordinates
-                let bar_center = i as f64 + 0.5;
-                // Directly initialize stroke based on theme
-                let stroke = if ui.ctx().theme().default_visuals().dark_mode {
-                    egui::Stroke::new(0.5, Color32::from_rgb(255, 255, 255))
-                } else {
-                    egui::Stroke::new(0.5, Color32::from_rgb(0, 0, 0))
-                };
-                Bar::new(bar_center, count_f64)
-                    .width(display_bar_width * 0.95) // Slight gap between bars
-                    .fill(hist_bar_color)
-                    .stroke(stroke)
-            })
-            .collect();
-
-        // Define element formatter for hover tooltip
-        let formatter = Box::new(move |bar: &Bar, _chart: &BarChart| {
-            // Calculate bin index from bar center (subtract 0.5 to get zero-based index)
-            let bin_index = (bar.argument - 0.5).floor() as usize;
-            // Calculate bin range
-            let bin_start = range_start + bin_index as f64 * bin_width;
-            let bin_end = bin_start + bin_width;
-            // Format bin start and end using the same formatting as measurements
-            let (formatted_start, _) =
-                crate::helpers::format_measurement(bin_start, 10, 1_000_000.0, 0.0001, &metermode);
-            let (formatted_end, _) =
-                crate::helpers::format_measurement(bin_end, 10, 1_000_000.0, 0.0001, &metermode);
-            // Sample count is the bar's value (height)
-            let sample_count = bar.value as usize;
-            format!(
-                "Bin Range: {} to {} {}\nSamples: {}",
-                formatted_start.trim_start(),
-                formatted_end.trim_start(),
-                display_unit,
-                sample_count
+    let (bar_chart, max_count, num_bins, bin_width, range_start, range_end) =
+        if hist_values_vec.is_empty() {
+            (
+                CustomBarChart::new(
+                    "Histogram (0 values, bin width: 0)".to_string(),
+                    vec![],
+                    0.0,
+                    0.0,
+                    0,
+                    display_unit,
+                    metermode,
+                ),
+                0.0,
+                0,
+                0.0,
+                0.0,
+                0.0,
             )
-        });
+        } else {
+            // Calculate min and max for binning
+            let (min, max) = hist_values_vec
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), &x| {
+                    (min.min(x), max.max(x))
+                });
+            // Ensure valid range, handle single-value case
+            let range_width = if min == max {
+                if min == 0.0 {
+                    1.0 // Avoid zero range for zero values
+                } else {
+                    min.abs() * 0.1 // 10% of value for single value
+                }
+            } else {
+                max - min
+            };
+            let range_start = if min == max {
+                min - range_width / 2.0
+            } else {
+                min
+            };
+            let range_end = range_start + range_width;
 
-        (
-            BarChart::new(chart_name, bars)
-                .color(hist_bar_color)
-                .element_formatter(formatter),
-            max_count,
-            num_bins,
-            bin_width,
-            range_start,
-            range_end,
-        )
-    };
+            // Determine number of bins
+            let num_bins = if graph_config.num_bins == 0 {
+                // Auto-bin using square root rule, capped at max_bins
+                let sqrt_bins = (hist_values_vec.len() as f64).sqrt().ceil() as usize;
+                sqrt_bins.min(graph_config.max_bins).max(1) // Ensure at least one bin
+            } else {
+                graph_config.num_bins.max(1) // Ensure at least one bin
+            };
+
+            // Calculate bin width in data units
+            let bin_width = range_width / num_bins as f64;
+
+            // Create bins
+            let mut counts = vec![0; num_bins];
+            for &value in &hist_values_vec {
+                if value >= range_start && value <= range_end {
+                    let bin_index = ((value - range_start) / bin_width).floor() as usize;
+                    let bin_index = bin_index.min(num_bins - 1); // Clamp to last bin
+                    counts[bin_index] += 1;
+                }
+            }
+
+            // Compute max_count separately
+            let max_count = *counts.iter().max().unwrap_or(&0) as f64;
+
+            // Format bin width for legend
+            let (formatted_bin_width, bin_width_unit) =
+                crate::helpers::format_measurement(bin_width, 10, 1_000_000.0, 0.0001, &metermode);
+            let chart_name = format!(
+                "  Samples: {}\nBin Width: {} {}\n      Min: {}\n      Max: {}",
+                hist_values_vec.len(),
+                formatted_bin_width.trim_start(),
+                bin_width_unit,
+                min,
+                max
+            );
+
+            // Create bars in normalized canvas coordinates (0 to num_bins)
+            let display_bar_width = 1.0; // Width of 1.0 in normalized units
+            let bars: Vec<Bar> = counts
+                .into_iter()
+                .enumerate()
+                .map(|(i, count)| {
+                    let count_f64 = count as f64;
+                    // Center the bar at i + 0.5 in normalized coordinates
+                    let bar_center = i as f64 + 0.5;
+                    // Directly initialize stroke based on theme
+                    let stroke = if ui.ctx().theme().default_visuals().dark_mode {
+                        egui::Stroke::new(0.5, Color32::from_rgb(255, 255, 255))
+                    } else {
+                        egui::Stroke::new(0.5, Color32::from_rgb(0, 0, 0))
+                    };
+                    Bar::new(bar_center, count_f64)
+                        .width(display_bar_width * 0.95) // Slight gap between bars
+                        .fill(hist_bar_color)
+                        .stroke(stroke)
+                })
+                .collect();
+
+            (
+                CustomBarChart::new(
+                    chart_name,
+                    bars,
+                    range_start,
+                    bin_width,
+                    num_bins,
+                    display_unit,
+                    metermode,
+                )
+                .color(hist_bar_color),
+                max_count,
+                num_bins,
+                bin_width,
+                range_start,
+                range_end,
+            )
+        };
 
     // Use bottom-up layout to place controls at bottom and plot above
     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
@@ -328,7 +452,7 @@ pub fn show_histogram(
         plot.show(ui, |plot_ui| {
             // Auto-scale x, do y manually to leave space for legend
             plot_ui.set_auto_bounds([true, true]);
-            plot_ui.bar_chart(bar_chart);
+            plot_ui.bar_chart(bar_chart.inner);
         });
     });
 }
