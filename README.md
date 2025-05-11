@@ -4,13 +4,21 @@ If you like this, a small donation is appreciated:
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R6R8DQO8C)
 
+RustyMeter is a GUI application written in Rust powered by the awesome egui framework and builds
+on the work of @TheHWCave to turn your OWON XDM multimeter into a PC-based powerhouse
+with neat graphing, recording, using it on stream etc.
+
+Meters which have been confirmed working already:
+
+- XDM1041
+- XDM1241
+- XDM2041 (except 4W resistance, not yet implemented)
+
+Looking for testers for the XDM3000 series!
+
 ![screenshot](assets/screenshot.png)
 
 ![recorder](assets/recorder.png)
-
-This is a GUI application written in Rust powered by the awesome egui framework and builds
-on the work of @TheHWCave to turn your OWON XDM1041 multimeter into a PC-based powerhouse
-with neat graphing, recording, using it on stream etc.
 
 Eventually, as this is all SCPI based, it could also be extended to other meters that have SCPI interfaces.
 Maybe some stuff even works out of the box.
@@ -26,18 +34,23 @@ Maybe some stuff even works out of the box.
 ## How to get going
 
 You can clone this repository and just run `cargo build --release`, provided you have rust installed (use `rustup`, it's easy).
-The Releases section has automatically built releases for Mac ARM64 and x86_64, Windows x86_64 and Linux x86_64.
+The Releases section has automatically built releases for Mac ARM64 and x86_64, Windows 11 x86_64 and Linux x86_64.
 
 ### IMPORTANT for Windows
 
 For Windows, if you do not have it from another application, you might need to install the ch340 serial driver.
 (Owon has it in their application installer package, it can also be found directly on the WCH manufacturer webpage)
 
+The pre-built binaries might not run on Windows 10 if the installation is not up to date. In this case you might
+need to compile from source.
+
 ### IMPORTANT for Mac/Linux
 
 Mac and Linux ship the driver per default. On Linux, you might need to configure udev-rules or make sure you are
 in the proper serial user group to access serial devices. (google for your distribution what the proper group is)
-Mac might require you to explicitly trust the application/binary in the system settings.
+
+Mac might require you to explicitly trust the application/binary in the system settings after first launch.
+Gatekeeper requires a signed binary and I have no way of obtaining this signature for such an open source project.
 
 ## What this is NOT
 
