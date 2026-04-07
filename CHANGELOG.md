@@ -2,7 +2,7 @@
 
 ## 0.4.2
 
-- TBD
+- add feature in settings menu to disable unit scaling for CONT mode
 
 ## 0.4.1
 
