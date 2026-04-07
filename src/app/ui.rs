@@ -382,6 +382,7 @@ impl super::MyApp {
                                 1_000_000.0,
                                 0.0001,
                                 &self.metermode,
+                                self.cont_disable_unit_scaling,
                             );
                             ui.label(
                                 egui::RichText::new(formatted_value)

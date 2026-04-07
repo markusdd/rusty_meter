@@ -94,6 +94,7 @@ pub struct MyApp {
     recording_interval_ms: u64,    // Persistent, fixed interval duration
     recording_active: bool,        // Persistent, whether recording is active
     recording_timestamp_format: TimestampFormat, // Persistent, timestamp format
+    cont_disable_unit_scaling: bool,
     #[serde(skip)]
     recording_data: Vec<Record>, // Do not persist recording data
     #[serde(skip)]
@@ -256,6 +257,7 @@ impl Default for MyApp {
             last_record_time: 0.0, // Initialize last recording time
             graph_config: graph::GraphConfig::default(), // Default graph config
             plot_dock_state: DockState::new(vec![]), // Initialize empty, populated in update
+            cont_disable_unit_scaling: false,
         }
     }
 }

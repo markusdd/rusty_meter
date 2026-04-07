@@ -6,6 +6,7 @@ pub fn format_measurement(
     sci_threshold_high: f64,
     sci_threshold_low: f64,
     meter_mode: &MeterMode,
+    cont_disable_unit_scaling: bool,
 ) -> (String, String) {
     if value.is_nan() {
         return ("    NaN".to_string(), "".to_string());
@@ -63,15 +64,19 @@ pub fn format_measurement(
             }
         }
         MeterMode::Res | MeterMode::Cont => {
-            if abs_value >= 1_000_000.0 {
-                display_value = value / 1_000_000.0;
-                display_unit = "MOhm".to_string();
-            } else if abs_value >= 1_000.0 {
-                display_value = value / 1_000.0;
-                display_unit = "kOhm".to_string();
-            } else if abs_value < 1.0 && abs_value > 0.0 {
-                display_value = value * 1000.0;
-                display_unit = "mOhm".to_string();
+            if cont_disable_unit_scaling && *meter_mode == MeterMode::Cont {
+                // skip formatting in this instance
+            } else {
+                if abs_value >= 1_000_000.0 {
+                    display_value = value / 1_000_000.0;
+                    display_unit = "MOhm".to_string();
+                } else if abs_value >= 1_000.0 {
+                    display_value = value / 1_000.0;
+                    display_unit = "kOhm".to_string();
+                } else if abs_value < 1.0 && abs_value > 0.0 {
+                    display_value = value * 1000.0;
+                    display_unit = "mOhm".to_string();
+                }
             }
         }
         MeterMode::Cap => {
