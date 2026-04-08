@@ -726,7 +726,7 @@ impl super::MyApp {
 
             // Show settings and recording windows
             self.show_settings(ui.ctx());
-            self.show_recording_window(ui.ctx());
+            self.show_recording_window(ui);
         });
     }
 }

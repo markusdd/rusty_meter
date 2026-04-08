@@ -2,29 +2,29 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use csv::WriterBuilder;
-use egui::{Context, FontId, RichText, TextEdit, ViewportBuilder, ViewportId};
+use egui::{FontId, RichText, TextEdit, ViewportBuilder, ViewportId};
 use egui_extras::{Column, TableBuilder};
 use rfd::FileDialog;
 use xlsxwriter::Workbook;
 
 impl super::MyApp {
-    pub fn show_recording_window(&mut self, ctx: &Context) {
+    pub fn show_recording_window(&mut self, ui: &mut egui::Ui) {
         if self.recording_open {
             let viewport_id = ViewportId::from_hash_of("recording_viewport");
 
-            ctx.show_viewport_immediate(
+            ui.ctx().show_viewport_immediate(
                 viewport_id,
                 ViewportBuilder::default()
                     .with_title("Data Recording")
                     .with_inner_size([600.0, 400.0])
                     .with_resizable(true),
-                |ctx, class| {
+                |ui, class| {
                     assert!(
                         class == egui::ViewportClass::Immediate,
                         "This example is only intended to run as an immediate viewport"
                     );
 
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.heading("Data Recording");
 
@@ -259,7 +259,7 @@ impl super::MyApp {
                     });
 
                     // Handle close request (e.g., window close button)
-                    if ctx.input(|i| i.viewport().close_requested()) {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
                         if self.recording_active {
                             self.recording_active = false;
                             self.save_recording_data();
@@ -268,7 +268,7 @@ impl super::MyApp {
                     }
 
                     // Request repaint to keep the viewport alive
-                    ctx.request_repaint();
+                    ui.ctx().request_repaint();
                 },
             );
         }
