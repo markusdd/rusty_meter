@@ -379,7 +379,7 @@ impl super::MyApp {
                                 self.curr_meas,
                                 10,
                                 1_000_000.0,
-                                0.0001,
+                                0.000001,
                                 &self.metermode,
                                 self.auto_scale_units(&self.metermode),
                             );
