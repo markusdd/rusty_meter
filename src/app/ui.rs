@@ -86,7 +86,7 @@ impl super::MyApp {
     }
 
     /// Called each time the UI needs repainting, which may be many times per second.
-    pub fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    pub fn update(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let is_web = cfg!(target_arch = "wasm32");
 
         // On startup, handle certain items once
@@ -188,7 +188,7 @@ impl super::MyApp {
         }
 
         // Handle graph and histogram updates and recording based on the configured interval
-        let current_time = ctx.input(|i| i.time); // Get current time in seconds
+        let current_time = ui.ctx().input(|i| i.time); // Get current time in seconds
         let graph_interval = *self.graph_update_interval_shared.lock().unwrap() as f64 / 1000.0; // Convert ms to seconds
         if current_time - self.last_graph_update >= graph_interval {
             if !self.curr_meas.is_nan() {
@@ -210,7 +210,7 @@ impl super::MyApp {
             self.last_graph_update = current_time;
         }
 
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        egui::Panel::top("top_panel").show_inside(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Settings").clicked() {
@@ -218,7 +218,7 @@ impl super::MyApp {
                     }
                     if !is_web && ui.button("Quit").clicked() {
                         self.disconnect(); // Use disconnect method instead of partial cleanup
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
                 ui.add_space(16.0);
@@ -226,7 +226,7 @@ impl super::MyApp {
             });
         });
 
-        egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
+        egui::Panel::bottom("bottom_panel").show_inside(ui, |ui| {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 powered_by(ui);
                 ui.hyperlink_to(
@@ -240,7 +240,7 @@ impl super::MyApp {
             });
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             if is_web {
                 ui.heading("RustyMeter");
             }
@@ -277,7 +277,7 @@ impl super::MyApp {
                                             self.connection_state =
                                                 super::ConnectionState::Connected;
                                             self.spawn_serial_task();
-                                            self.spawn_graph_update_task(ctx.clone());
+                                            self.spawn_graph_update_task(ui.ctx().clone());
                                         }
                                     }
                                     Err(e) => {
@@ -725,8 +725,8 @@ impl super::MyApp {
             }
 
             // Show settings and recording windows
-            self.show_settings(ctx);
-            self.show_recording_window(ctx);
+            self.show_settings(ui.ctx());
+            self.show_recording_window(ui.ctx());
         });
     }
 }
@@ -736,7 +736,7 @@ impl eframe::App for super::MyApp {
         self.save(storage);
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.update(ctx, frame);
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.update(ui, frame);
     }
 }

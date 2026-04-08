@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.4.3
+
+- TODO: Fix bug that change interval of graph only applies after restart
+- upgrade to egui 0.34.1
+- upgrade to rust 1.92
+- use temporary version of egui-dropdown until PR is included to build against egui 0.34.1
+
 ## 0.4.2
 
 - add feature in settings menu to disable unit scaling for CONT mode

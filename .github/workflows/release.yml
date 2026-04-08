@@ -1,7 +1,7 @@
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   version:
@@ -31,7 +31,7 @@ jobs:
             use_docker: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            suffix: ''
+            suffix: ""
             use_docker: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -64,7 +64,7 @@ jobs:
             dnf groupinstall -y "Development Tools" &&
             dnf install -y curl clang clang-devel libxkbcommon-devel mesa-libGL-devel libX11-devel \
                            wayland-devel libpng-devel libjpeg-devel openssl-devel pkgconf-pkg-config &&
-            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.84.0 &&
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92.0 &&
             source $HOME/.cargo/env &&
             rustc --version &&
             ls -l /usr/lib64/libclang* &&
@@ -112,13 +112,13 @@ jobs:
         uses: actions/cache@master
         with:
           path: ~/.cargo/registry
-          key: '${{ runner.os }}-cargo-registry-${{ hashFiles(''**/Cargo.lock'') }}'
+          key: "${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}"
       - name: Cache Rust git index (non-Docker)
         if: ${{ !matrix.use_docker }}
         uses: actions/cache@master
         with:
           path: ~/.cargo/git
-          key: '${{ runner.os }}-cargo-index-${{ hashFiles(''**/Cargo.lock'') }}'
+          key: "${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}"
       - name: Cache build target (non-Docker)
         if: ${{ !matrix.use_docker }}
         uses: actions/cache@master
@@ -217,11 +217,11 @@ jobs:
         if: ${{ !matrix.use_docker && matrix.target != 'universal-apple-darwin' }}
         uses: actions-rs/cargo@v1
         env:
-          VERSION: '${{ steps.get_version.outputs.VERSION }}'
-          REPOSITORY_NAME: '${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}'
+          VERSION: "${{ steps.get_version.outputs.VERSION }}"
+          REPOSITORY_NAME: "${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}"
         with:
           command: build
-          args: '--release'
+          args: "--release"
       - name: Upload artifact
         uses: actions/upload-artifact@master
         with:
@@ -269,41 +269,41 @@ jobs:
       - id: create_release
         uses: actions/create-release@latest
         env:
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
         with:
-          tag_name: '${{ steps.get_version.outputs.VERSION }}'
-          release_name: 'Release ${{ steps.get_version.outputs.VERSION }}'
+          tag_name: "${{ steps.get_version.outputs.VERSION }}"
+          release_name: "Release ${{ steps.get_version.outputs.VERSION }}"
           draft: false
           prerelease: false
       - uses: actions/upload-release-asset@latest
         env:
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
         with:
-          upload_url: '${{ steps.create_release.outputs.upload_url }}'
+          upload_url: "${{ steps.create_release.outputs.upload_url }}"
           asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-unknown-linux-gnu/target/x86_64-unknown-linux-gnu/release/rusty_meter
           asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-unknown-linux-gnu
           asset_content_type: application/octet-stream
       - uses: actions/upload-release-asset@latest
         env:
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
         with:
-          upload_url: '${{ steps.create_release.outputs.upload_url }}'
+          upload_url: "${{ steps.create_release.outputs.upload_url }}"
           asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-unknown-linux-gnu/RustyMeter-${{ steps.get_version.outputs.VERSION }}-x86_64.AppImage
           asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64.AppImage
           asset_content_type: application/x-executable
       - uses: actions/upload-release-asset@latest
         env:
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
         with:
-          upload_url: '${{ steps.create_release.outputs.upload_url }}'
+          upload_url: "${{ steps.create_release.outputs.upload_url }}"
           asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-universal-apple-darwin/RustyMeter-${{ steps.get_version.outputs.VERSION }}.dmg
           asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-universal-apple-darwin.dmg
           asset_content_type: application/x-diskcopy
       - uses: actions/upload-release-asset@latest
         env:
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
         with:
-          upload_url: '${{ steps.create_release.outputs.upload_url }}'
+          upload_url: "${{ steps.create_release.outputs.upload_url }}"
           asset_path: ./${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-pc-windows-msvc/rusty_meter.exe
           asset_name: ${{ steps.get_repository_name.outputs.REPOSITORY_NAME }}-x86_64-pc-windows-msvc.exe
           asset_content_type: application/octet-stream
