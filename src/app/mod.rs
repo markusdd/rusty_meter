@@ -156,8 +156,6 @@ pub struct MyApp {
     #[serde(skip)]
     poll_interval_shared: Arc<Mutex<u64>>, // Shared poll interval for live updates
     #[serde(skip)]
-    graph_update_interval_shared: Arc<Mutex<u64>>, // Shared graph update interval
-    #[serde(skip)]
     last_graph_update: f64, // Track last graph update time
     #[serde(skip)]
     last_hist_collect_time: f64, // Track last histogram collection time
@@ -248,14 +246,13 @@ impl Default for MyApp {
             lock_remote: true,            // Default to locking remote mode
             value_debug_shared: Arc::new(Mutex::new(false)),
             poll_interval_shared: Arc::new(Mutex::new(20)),
-            graph_update_interval_shared: Arc::new(Mutex::new(20)), // Default shared value to 20ms
-            last_graph_update: 0.0,                                 // Initialize to 0
-            last_hist_collect_time: 0.0,                            // Initialize to 0
-            connection_state: ConnectionState::Disconnected,        // Initially disconnected
-            connection_error: None,                                 // No error initially
-            meas_count: 0,         // Initialize measurement counter
-            last_record_time: 0.0, // Initialize last recording time
-            graph_config: graph::GraphConfig::default(), // Default graph config
+            last_graph_update: 0.0,                          // Initialize to 0
+            last_hist_collect_time: 0.0,                     // Initialize to 0
+            connection_state: ConnectionState::Disconnected, // Initially disconnected
+            connection_error: None,                          // No error initially
+            meas_count: 0,                                   // Initialize measurement counter
+            last_record_time: 0.0,                           // Initialize last recording time
+            graph_config: graph::GraphConfig::default(),     // Default graph config
             plot_dock_state: DockState::new(vec![]), // Initialize empty, populated in update
             cont_disable_unit_scaling: false,
         }
@@ -291,28 +288,13 @@ impl MyApp {
             let app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
             *app.value_debug_shared.lock().unwrap() = app.value_debug;
             *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
-            *app.graph_update_interval_shared.lock().unwrap() = app.graph_update_interval_ms;
             return app;
         }
 
         let app = Self::default();
         *app.value_debug_shared.lock().unwrap() = app.value_debug;
         *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
-        *app.graph_update_interval_shared.lock().unwrap() = app.graph_update_interval_ms;
         app
-    }
-
-    fn spawn_graph_update_task(&mut self, ctx: Context) {
-        let graph_update_interval_shared = self.graph_update_interval_shared.clone();
-        let ctx = ctx.clone();
-
-        tokio::spawn(async move {
-            loop {
-                let interval = *graph_update_interval_shared.lock().unwrap();
-                ctx.request_repaint(); // Trigger a repaint to update the graph
-                tokio::time::sleep(Duration::from_millis(interval)).await;
-            }
-        });
     }
 
     fn set_mode(

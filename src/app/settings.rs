@@ -147,8 +147,6 @@ impl super::MyApp {
                                     {
                                         self.graph_update_interval_ms =
                                             self.graph_update_interval_max;
-                                        *self.graph_update_interval_shared.lock().unwrap() =
-                                            self.graph_update_interval_max;
                                     }
                                 }
                             }

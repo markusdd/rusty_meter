@@ -189,7 +189,7 @@ impl super::MyApp {
 
         // Handle graph and histogram updates and recording based on the configured interval
         let current_time = ui.ctx().input(|i| i.time); // Get current time in seconds
-        let graph_interval = *self.graph_update_interval_shared.lock().unwrap() as f64 / 1000.0; // Convert ms to seconds
+        let graph_interval = self.graph_update_interval_ms as f64 / 1000.0; // Convert ms to seconds
         if current_time - self.last_graph_update >= graph_interval {
             if !self.curr_meas.is_nan() {
                 self.values.push_back(self.curr_meas);
@@ -277,7 +277,6 @@ impl super::MyApp {
                                             self.connection_state =
                                                 super::ConnectionState::Connected;
                                             self.spawn_serial_task();
-                                            self.spawn_graph_update_task(ui.ctx().clone());
                                         }
                                     }
                                     Err(e) => {
@@ -727,6 +726,13 @@ impl super::MyApp {
             // Show settings and recording windows
             self.show_settings(ui.ctx());
             self.show_recording_window(ui);
+
+            // ensure repaint based on update intervals
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(std::cmp::min(
+                    self.graph_update_interval_ms,
+                    self.poll_interval_ms,
+                )));
         });
     }
 }
