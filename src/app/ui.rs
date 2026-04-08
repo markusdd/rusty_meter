@@ -698,7 +698,7 @@ impl super::MyApp {
                             )
                             .changed()
                         {
-                            self.set_auto_scale_units(self.metermode.clone(), auto_scale);
+                            self.set_auto_scale_units(self.metermode, auto_scale);
                         }
                     });
                 });

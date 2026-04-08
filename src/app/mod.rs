@@ -392,7 +392,7 @@ impl MyApp {
     pub fn auto_scale_units(&self, mode: &MeterMode) -> bool {
         self.mode_display_settings
             .get(mode)
-            .map_or(true, |s| s.auto_scale_units) // default = enabled (matches current behavior for all modes)
+            .is_none_or(|s| s.auto_scale_units) // default = enabled
     }
 
     pub fn set_auto_scale_units(&mut self, mode: MeterMode, enabled: bool) {
