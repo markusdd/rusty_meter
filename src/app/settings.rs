@@ -23,11 +23,6 @@ impl super::MyApp {
                             self.value_debug = value_debug;
                             *self.value_debug_shared.lock().unwrap() = value_debug;
                         }
-                        ui.checkbox(&
-                          mut self.cont_disable_unit_scaling,
-                    "Disable unit scaling in CONT mode (always show raw Ω)"
-                        );
-                        ui.label("Useful when you prefer the exact resistance value without mΩ/kΩ/MΩ prefixes in continuity mode.");
                         ui.label("Baud rate:");
                         ui.add(
                             TextEdit::singleline(&mut self.baud_rate.to_string())

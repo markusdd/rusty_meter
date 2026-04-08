@@ -381,7 +381,7 @@ impl super::MyApp {
                                 1_000_000.0,
                                 0.0001,
                                 &self.metermode,
-                                self.cont_disable_unit_scaling,
+                                self.auto_scale_units(&self.metermode),
                             );
                             ui.label(
                                 egui::RichText::new(formatted_value)
@@ -687,6 +687,18 @@ impl super::MyApp {
                                     }
                                 }
                             }
+                        }
+
+                        // scale control per mode
+                        let mut auto_scale = self.auto_scale_units(&self.metermode);
+                        if ui
+                            .checkbox(&mut auto_scale, "Auto-scale units")
+                            .on_hover_text(
+                                "Auto scale values and show prefixed units like mV/mΩ/kΩ",
+                            )
+                            .changed()
+                        {
+                            self.set_auto_scale_units(self.metermode.clone(), auto_scale);
                         }
                     });
                 });

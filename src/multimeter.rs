@@ -1,4 +1,5 @@
 use phf::{OrderedMap, phf_ordered_map};
+use serde::{Deserialize, Serialize};
 
 /// A trait that must be implemented for all SCPI command structs.
 /// Gets passed the struct instance itself and the selected option name
@@ -14,7 +15,7 @@ pub enum ScpiMode {
     Meas,
 }
 
-#[derive(PartialEq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash, Serialize, Deserialize)]
 pub enum MeterMode {
     Vdc,
     Vac,

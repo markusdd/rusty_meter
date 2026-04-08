@@ -6,7 +6,7 @@ pub fn format_measurement(
     sci_threshold_high: f64,
     sci_threshold_low: f64,
     meter_mode: &MeterMode,
-    cont_disable_unit_scaling: bool,
+    auto_scale_units: bool,
 ) -> (String, String) {
     if value.is_nan() {
         return ("    NaN".to_string(), "".to_string());
@@ -40,33 +40,31 @@ pub fn format_measurement(
     .to_string();
 
     // Adjust value and unit based on mode and magnitude
-    match meter_mode {
-        MeterMode::Vdc | MeterMode::Vac => {
-            if abs_value < 1.0 {
-                display_value = value * 1000.0;
-                display_unit = if matches!(meter_mode, MeterMode::Vdc) {
-                    "mVDC"
-                } else {
-                    "mVAC"
+    if auto_scale_units {
+        match meter_mode {
+            MeterMode::Vdc | MeterMode::Vac => {
+                if abs_value < 1.0 {
+                    display_value = value * 1000.0;
+                    display_unit = if matches!(meter_mode, MeterMode::Vdc) {
+                        "mVDC"
+                    } else {
+                        "mVAC"
+                    }
+                    .to_string();
                 }
-                .to_string();
             }
-        }
-        MeterMode::Adc | MeterMode::Aac => {
-            if abs_value < 1.0 {
-                display_value = value * 1000.0;
-                display_unit = if matches!(meter_mode, MeterMode::Adc) {
-                    "mADC"
-                } else {
-                    "mAAC"
+            MeterMode::Adc | MeterMode::Aac => {
+                if abs_value < 1.0 {
+                    display_value = value * 1000.0;
+                    display_unit = if matches!(meter_mode, MeterMode::Adc) {
+                        "mADC"
+                    } else {
+                        "mAAC"
+                    }
+                    .to_string();
                 }
-                .to_string();
             }
-        }
-        MeterMode::Res | MeterMode::Cont => {
-            if cont_disable_unit_scaling && *meter_mode == MeterMode::Cont {
-                // skip formatting in this instance
-            } else {
+            MeterMode::Res | MeterMode::Cont => {
                 if abs_value >= 1_000_000.0 {
                     display_value = value / 1_000_000.0;
                     display_unit = "MOhm".to_string();
@@ -78,26 +76,26 @@ pub fn format_measurement(
                     display_unit = "mOhm".to_string();
                 }
             }
-        }
-        MeterMode::Cap => {
-            if abs_value >= 0.001 {
-                display_value = value * 1000.0;
-                display_unit = "mF".to_string();
-            } else if abs_value >= 0.000_001 {
-                display_value = value * 1_000_000.0;
-                display_unit = "μF".to_string();
-            } else if abs_value > 0.0 {
-                display_value = value * 1_000_000_000.0;
-                display_unit = "nF".to_string();
+            MeterMode::Cap => {
+                if abs_value >= 0.001 {
+                    display_value = value * 1000.0;
+                    display_unit = "mF".to_string();
+                } else if abs_value >= 0.000_001 {
+                    display_value = value * 1_000_000.0;
+                    display_unit = "μF".to_string();
+                } else if abs_value > 0.0 {
+                    display_value = value * 1_000_000_000.0;
+                    display_unit = "nF".to_string();
+                }
             }
-        }
-        MeterMode::Per => {
-            if abs_value < 1.0 {
-                display_value = value * 1000.0;
-                display_unit = "ms".to_string();
+            MeterMode::Per => {
+                if abs_value < 1.0 {
+                    display_value = value * 1000.0;
+                    display_unit = "ms".to_string();
+                }
             }
+            _ => {}
         }
-        _ => {}
     }
 
     let abs_display_value = display_value.abs();

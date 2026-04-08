@@ -2,7 +2,9 @@
 
 ## 0.4.3
 
-- TODO: Fix bug that change interval of graph only applies after restart
+- fix bug that change interval of graph only applies after restart
+- make auto scaling of units and measurements selectable per mode
+- simplify repaint logic and ensure number box update is not tied to graph update
 - upgrade to egui 0.34.1
 - upgrade to rust 1.92
 - use temporary version of egui-dropdown until PR is included to build against egui 0.34.1

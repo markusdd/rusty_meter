@@ -1,12 +1,11 @@
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
-use egui::{Color32, Context, FontData, FontDefinitions, FontFamily};
+use egui::{Color32, FontData, FontDefinitions, FontFamily};
 use egui_dock::DockState;
 use mio::{Events, Poll};
 use mio_serial::{SerialPortInfo, SerialStream};
@@ -56,6 +55,11 @@ pub struct Record {
     pub value: f64,
 }
 
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+struct ModeDisplaySettings {
+    pub auto_scale_units: bool, // true = use mV / mΩ / kΩ etc. (current default behavior)
+}
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(Serialize, Deserialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
@@ -94,7 +98,7 @@ pub struct MyApp {
     recording_interval_ms: u64,    // Persistent, fixed interval duration
     recording_active: bool,        // Persistent, whether recording is active
     recording_timestamp_format: TimestampFormat, // Persistent, timestamp format
-    cont_disable_unit_scaling: bool,
+    mode_display_settings: HashMap<MeterMode, ModeDisplaySettings>,
     #[serde(skip)]
     recording_data: Vec<Record>, // Do not persist recording data
     #[serde(skip)]
@@ -254,7 +258,7 @@ impl Default for MyApp {
             last_record_time: 0.0,                           // Initialize last recording time
             graph_config: graph::GraphConfig::default(),     // Default graph config
             plot_dock_state: DockState::new(vec![]), // Initialize empty, populated in update
-            cont_disable_unit_scaling: false,
+            mode_display_settings: HashMap::default(),
         }
     }
 }
@@ -383,5 +387,19 @@ impl MyApp {
         self.values.clear(); // Clear graph data
         self.hist_values.clear(); // Clear histogram data
         self.meas_count = 0; // Reset measurement counter
+    }
+
+    pub fn auto_scale_units(&self, mode: &MeterMode) -> bool {
+        self.mode_display_settings
+            .get(mode)
+            .map_or(true, |s| s.auto_scale_units) // default = enabled (matches current behavior for all modes)
+    }
+
+    pub fn set_auto_scale_units(&mut self, mode: MeterMode, enabled: bool) {
+        self.mode_display_settings
+            .entry(mode)
+            .or_default()
+            .auto_scale_units = enabled;
+        // Optional: self.save_settings() if you have an immediate-save helper
     }
 }
