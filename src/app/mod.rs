@@ -80,7 +80,8 @@ pub struct MyApp {
     poll_interval_ms: u64,
     graph_update_interval_ms: u64, // Persistent, adjustable via slider in main GUI
     graph_update_interval_max: u64, // Persistent, maximum for graph update interval slider
-    beeper_enabled: bool,          // New field for beeper state, persistent
+    beeper_enabled: bool,          // Persistent, beeper state
+    rst_on_disconnect: bool,       // Persistent, whther to send RST SCPI cmd on disconnect
     cont_threshold: u32,           // Persistent continuity threshold (0-1000 ohms)
     diod_threshold: f32,           // Persistent diode threshold (0-3.0 volts)
     lock_remote: bool,             // Persistent, whether to lock meter in remote mode
@@ -245,6 +246,7 @@ impl Default for MyApp {
             graph_update_interval_ms: 20, // Default to 20ms for ~50 FPS
             graph_update_interval_max: 1000, // Default maximum of 1000ms
             beeper_enabled: true,         // Default to on, per meter spec
+            rst_on_disconnect: true,      // Default to on, can be disabled in settings
             cont_threshold: 50,           // Default continuity threshold: 50 ohms
             diod_threshold: 2.0,          // Default diode threshold: 2.0 volts (mid-range)
             lock_remote: true,            // Default to locking remote mode

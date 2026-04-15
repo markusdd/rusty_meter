@@ -31,6 +31,7 @@ impl super::MyApp {
         let poll_interval_shared = self.poll_interval_shared.clone();
         let device_shared = self.device.clone();
         let lock_remote = self.lock_remote;
+        let rst_on_disconnect = self.rst_on_disconnect;
         let beeper_enabled = self.beeper_enabled;
         let cont_threshold = self.cont_threshold;
         let diod_threshold = self.diod_threshold;
@@ -85,9 +86,11 @@ impl super::MyApp {
                         }
                         shutting_down = true;
                         command_queue.push_back("SYST:LOC\n".to_string());
-                        command_queue.push_back("*RST\n".to_string());
+                        if rst_on_disconnect {
+                            command_queue.push_back("*RST\n".to_string());
+                        }
                         if *value_debug_shared.lock().unwrap() {
-                            println!("Queued SYST:LOC and *RST for shutdown, queue: {:?}", command_queue);
+                            println!("Queued SYST:LOC and *RST (if set) for shutdown, queue: {:?}", command_queue);
                         }
                     }
                     _ = async {
@@ -148,12 +151,18 @@ impl super::MyApp {
                                                             );
                                                         }
                                                     }
-                                                    // Set flag to drop serial after *RST is sent during shutdown
-                                                    if shutting_down && cmd == "*RST\n" {
-                                                        if debug {
-                                                            println!("*RST sent, marking serial for shutdown");
+                                                    // Set flag to drop serial after *RST or SYST:LOC is sent during shutdown
+                                                    if shutting_down {
+                                                        if (rst_on_disconnect && cmd == "*RST\n") || (!rst_on_disconnect && cmd == "SYST:LOC\n") {
+                                                            if debug {
+                                                                if rst_on_disconnect {
+                                                                    println!("*RST sent, marking serial for shutdown");
+                                                                } else {
+                                                                    println!("SYST:LOC sent, marking serial for shutdown");
+                                                                }
+                                                            }
+                                                            drop_serial = true;
                                                         }
-                                                        drop_serial = true;
                                                     }
                                                 }
                                                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {

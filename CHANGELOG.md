@@ -2,6 +2,10 @@
 
 ## 0.4.3
 
+- add settings menu option to not send RST on disconnect if user doesn't want it
+
+## 0.4.3
+
 - fix bug that change interval of graph only applies after restart
 - make auto scaling of units and measurements selectable per mode
 - simplify repaint logic and ensure number box update is not tied to graph update
