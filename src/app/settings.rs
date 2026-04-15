@@ -11,7 +11,10 @@ impl super::MyApp {
                         ui.heading("Settings");
                         ui.checkbox(&mut self.connect_on_startup, "Connect on startup");
                         ui.checkbox(&mut self.lock_remote, "Lock meter in remote mode");
-                        ui.checkbox(&mut self.rst_on_disconnect, "Send RST via SCPI on disconnect");
+                        ui.checkbox(
+                            &mut self.rst_on_disconnect,
+                            "Send RST via SCPI on disconnect",
+                        );
                         ui.checkbox(
                             &mut self.parity,
                             "Use parity bit (ignored right now, always None)",
