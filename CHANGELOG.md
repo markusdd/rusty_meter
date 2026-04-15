@@ -1,6 +1,10 @@
 # CHANGELOG
 
-## 0.4.3
+## 0.4.5
+
+- WIP
+
+## 0.4.4
 
 - add settings menu option to not send RST on disconnect if user doesn't want it
 
