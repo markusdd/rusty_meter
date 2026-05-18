@@ -88,6 +88,7 @@ impl super::MyApp {
     /// Called each time the UI needs repainting, which may be many times per second.
     pub fn update(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let is_web = cfg!(target_arch = "wasm32");
+        let mut connect_now = false;
 
         // On startup, handle certain items once
         if !self.is_init {
@@ -114,6 +115,9 @@ impl super::MyApp {
             // Initialize dock state
             let tabs = vec![PlotTab::Graph, PlotTab::Histogram];
             self.plot_dock_state = DockState::new(tabs);
+            if self.connect_on_startup {
+                connect_now = true;
+            }
             self.is_init = true;
         }
 
@@ -262,7 +266,8 @@ impl super::MyApp {
 
                     match self.connection_state {
                         super::ConnectionState::Disconnected => {
-                            if ui.button("Connect").clicked() {
+                            if ui.button("Connect").clicked() || connect_now {
+                                connect_now = false;
                                 self.connection_state = super::ConnectionState::Connecting;
                                 self.connection_error = None;
                                 match mio_serial::new(&self.serial_port, self.baud_rate)

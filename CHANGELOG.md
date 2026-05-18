@@ -1,8 +1,13 @@
 # CHANGELOG
 
-## 0.4.5
+## 0.4.6
 
 - WIP
+
+## 0.4.5
+
+- fix auto-connect on startup option
+- bump to egui 0.34.2
 
 ## 0.4.4
 
