@@ -14,11 +14,21 @@ use tokio::sync::{mpsc, oneshot};
 use crate::multimeter::{MeterMode, RangeCmd, RateCmd, ScpiMode};
 
 // Submodules for split impl blocks
+#[cfg(not(target_arch = "wasm32"))]
+mod hid;
 mod graph;
 mod recording;
 mod serial;
 mod settings;
 mod ui;
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ConnectionType {
+    #[default]
+    Serial,
+    #[cfg(not(target_arch = "wasm32"))]
+    VictorHid,
+}
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -64,7 +74,10 @@ struct ModeDisplaySettings {
 #[derive(Serialize, Deserialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
 pub struct MyApp {
+    connection_type: ConnectionType,
     serial_port: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    hid_device_path: String,
     baud_rate: u32,
     bits: u32,
     stop_bits: u32,
@@ -122,6 +135,9 @@ pub struct MyApp {
     readbuf: [u8; 1024],
     #[serde(skip)]
     portlist: VecDeque<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    hid_devicelist: VecDeque<(String, String)>,
     #[serde(skip)]
     values: VecDeque<f64>,
     #[serde(skip)]
@@ -188,7 +204,10 @@ enum ConnectionState {
 impl Default for MyApp {
     fn default() -> Self {
         Self {
+            connection_type: ConnectionType::default(),
             serial_port: "".to_owned(),
+            #[cfg(not(target_arch = "wasm32"))]
+            hid_device_path: "".to_owned(),
             baud_rate: 115200,
             bits: 8,
             stop_bits: 1,
@@ -210,6 +229,8 @@ impl Default for MyApp {
             issue_new_write: false,
             readbuf: [0u8; 1024],
             portlist: VecDeque::with_capacity(11),
+            #[cfg(not(target_arch = "wasm32"))]
+            hid_devicelist: VecDeque::with_capacity(4),
             values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
             hist_values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1), // Initialize histogram buffer
             poll: Poll::new().unwrap(),
@@ -403,5 +424,9 @@ impl MyApp {
             .or_default()
             .auto_scale_units = enabled;
         // Optional: self.save_settings() if you have an immediate-save helper
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        matches!(self.connection_type, ConnectionType::VictorHid)
     }
 }

@@ -97,6 +97,8 @@ impl super::MyApp {
                     self.portlist.push_front(p.port_name);
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            self.refresh_hid_devices();
             // Apply initial sampling rate
             self.confstring = self
                 .ratecmd
@@ -251,18 +253,78 @@ impl super::MyApp {
 
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Serial port: ");
-                    ui.add(
-                        DropDownBox::from_iter(
-                            &self.portlist,
-                            "portlistbox",
-                            &mut self.serial_port,
-                            |ui, text| ui.selectable_label(false, text),
-                        )
-                        .desired_width(150.0)
-                        .select_on_focus(true)
-                        .filter_by_input(false),
-                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        ui.label("Connection:");
+                        egui::ComboBox::from_id_salt("connection_type")
+                            .selected_text(match self.connection_type {
+                                super::ConnectionType::Serial => "SCPI Serial",
+                                super::ConnectionType::VictorHid => "Victor USB HID",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.connection_type,
+                                    super::ConnectionType::Serial,
+                                    "SCPI Serial",
+                                );
+                                ui.selectable_value(
+                                    &mut self.connection_type,
+                                    super::ConnectionType::VictorHid,
+                                    "Victor USB HID",
+                                );
+                            });
+                    }
+
+                    match self.connection_type {
+                        super::ConnectionType::Serial => {
+                            ui.label("Serial port:");
+                            ui.add(
+                                DropDownBox::from_iter(
+                                    &self.portlist,
+                                    "portlistbox",
+                                    &mut self.serial_port,
+                                    |ui, text| ui.selectable_label(false, text),
+                                )
+                                .desired_width(150.0)
+                                .select_on_focus(true)
+                                .filter_by_input(false),
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        super::ConnectionType::VictorHid => {
+                            ui.label("HID device:");
+                            let mut selected_idx = self
+                                .hid_devicelist
+                                .iter()
+                                .position(|(path, _)| path == &self.hid_device_path)
+                                .unwrap_or(0);
+                            egui::ComboBox::from_id_salt("hid_devicelist")
+                                .selected_text(
+                                    self.hid_devicelist
+                                        .get(selected_idx)
+                                        .map(|(_, l)| l.as_str())
+                                        .unwrap_or("No Victor device found"),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for (idx, (path, label)) in
+                                        self.hid_devicelist.iter().enumerate()
+                                    {
+                                        if ui
+                                            .selectable_value(&mut selected_idx, idx, label)
+                                            .clicked()
+                                        {
+                                            self.hid_device_path = path.clone();
+                                        }
+                                    }
+                                });
+                            if let Some((path, _)) = self.hid_devicelist.get(selected_idx) {
+                                self.hid_device_path = path.clone();
+                            }
+                            if ui.button("Refresh").clicked() {
+                                self.refresh_hid_devices();
+                            }
+                        }
+                    }
 
                     match self.connection_state {
                         super::ConnectionState::Disconnected => {
@@ -270,25 +332,53 @@ impl super::MyApp {
                                 connect_now = false;
                                 self.connection_state = super::ConnectionState::Connecting;
                                 self.connection_error = None;
-                                match mio_serial::new(&self.serial_port, self.baud_rate)
-                                    .open_native_async()
-                                {
-                                    Ok(serial) => {
-                                        self.serial = Some(serial);
-                                        if let Some(ref mut serial) = self.serial {
-                                            let _ = serial.set_data_bits(DataBits::Eight);
-                                            let _ = serial.set_stop_bits(mio_serial::StopBits::One);
-                                            let _ = serial.set_parity(mio_serial::Parity::None);
-                                            self.connection_state =
-                                                super::ConnectionState::Connected;
-                                            self.spawn_serial_task();
+
+                                match self.connection_type {
+                                    super::ConnectionType::Serial => {
+                                        match mio_serial::new(&self.serial_port, self.baud_rate)
+                                            .open_native_async()
+                                        {
+                                            Ok(serial) => {
+                                                self.serial = Some(serial);
+                                                if let Some(ref mut serial) = self.serial {
+                                                    let _ =
+                                                        serial.set_data_bits(DataBits::Eight);
+                                                    let _ = serial.set_stop_bits(
+                                                        mio_serial::StopBits::One,
+                                                    );
+                                                    let _ =
+                                                        serial.set_parity(mio_serial::Parity::None);
+                                                    self.connection_state =
+                                                        super::ConnectionState::Connected;
+                                                    self.curr_meter = "OWON XDM1041".to_owned();
+                                                    self.spawn_serial_task();
+                                                }
+                                            }
+                                            Err(e) => {
+                                                self.connection_state =
+                                                    super::ConnectionState::Disconnected;
+                                                self.connection_error = Some(format!(
+                                                    "Failed to connect: {}",
+                                                    e
+                                                ));
+                                            }
                                         }
                                     }
-                                    Err(e) => {
-                                        self.connection_state =
-                                            super::ConnectionState::Disconnected;
-                                        self.connection_error =
-                                            Some(format!("Failed to connect: {}", e));
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    super::ConnectionType::VictorHid => {
+                                        if self.hid_device_path.is_empty() {
+                                            self.connection_state =
+                                                super::ConnectionState::Disconnected;
+                                            self.connection_error = Some(
+                                                "No Victor HID device selected".to_owned(),
+                                            );
+                                        } else {
+                                            self.connection_state =
+                                                super::ConnectionState::Connected;
+                                            self.curr_meter = "Victor 86 series".to_owned();
+                                            self.rangecmd = None;
+                                            self.spawn_hid_task();
+                                        }
                                     }
                                 }
                             }
@@ -423,7 +513,17 @@ impl super::MyApp {
                 };
                 control_frame.show(ui, |ui| {
                     ui.vertical(|ui| {
+                        if self.is_read_only() {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Read only — change mode on the meter",
+                                )
+                                .italics(),
+                            );
+                        }
                         let btn_size = Vec2 { x: 70.0, y: 20.0 };
+                        let read_only = self.is_read_only();
+                        ui.add_enabled_ui(!read_only, |ui| {
                         ui.horizontal(|ui| {
                             let vdc_btn = egui::Button::new("VDC")
                                 .selected(self.metermode == MeterMode::Vdc)
@@ -556,6 +656,7 @@ impl super::MyApp {
                                 );
                             }
                         });
+                        }); // add_enabled_ui
                     });
                 });
 
@@ -574,6 +675,17 @@ impl super::MyApp {
                 };
                 options_frame.show(ui, |ui| {
                     ui.vertical(|ui| {
+                        if self.is_read_only() {
+                            ui.label("Mode/range controlled on device");
+                            let mut auto_scale = self.auto_scale_units(&self.metermode);
+                            if ui
+                                .checkbox(&mut auto_scale, "Auto-scale units")
+                                .changed()
+                            {
+                                self.set_auto_scale_units(self.metermode, auto_scale);
+                            }
+                            return;
+                        }
                         let ratebox = egui::ComboBox::from_label("Sampling Rate").show_index(
                             ui,
                             &mut self.curr_rate,

@@ -5,3 +5,5 @@ mod app;
 pub use app::MyApp;
 mod helpers;
 mod multimeter;
+#[cfg(not(target_arch = "wasm32"))]
+mod victor;

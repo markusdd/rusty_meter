@@ -48,6 +48,7 @@ rfd = "0.17.2" # For file dialogs
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11.10"
+hidapi = "2.6.3"
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
