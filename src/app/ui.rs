@@ -172,6 +172,10 @@ impl super::MyApp {
                             self.curr_unit = "s".to_owned();
                             self.rangecmd = None;
                         }
+                        MeterMode::Duty => {
+                            self.curr_unit = "%".to_owned();
+                            self.rangecmd = None;
+                        }
                         MeterMode::Diod => {
                             self.curr_unit = "V".to_owned();
                             self.rangecmd = None;
@@ -616,6 +620,14 @@ impl super::MyApp {
                                 .min_size(btn_size);
                             if ui.add(per_btn).clicked() {
                                 self.set_mode(MeterMode::Per, "s", "CONF:PER\n", Some("PER"), None);
+                            }
+                            if self.mode_visible_in_ui(MeterMode::Duty) {
+                                let duty_btn = egui::Button::new("Duty")
+                                    .selected(self.metermode == MeterMode::Duty)
+                                    .min_size(btn_size);
+                                if ui.add(duty_btn).clicked() {
+                                    self.set_mode(MeterMode::Duty, "%", "", None, None);
+                                }
                             }
                         });
                         ui.horizontal(|ui| {

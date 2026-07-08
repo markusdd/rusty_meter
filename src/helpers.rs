@@ -33,6 +33,7 @@ pub fn format_measurement(
         MeterMode::Cap => "F",
         MeterMode::Freq => "Hz",
         MeterMode::Per => "s",
+        MeterMode::Duty => "%",
         MeterMode::Diod => "V",
         MeterMode::Cont => "Ohm",
         MeterMode::Temp => "°C",

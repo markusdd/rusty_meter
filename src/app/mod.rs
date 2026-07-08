@@ -429,4 +429,21 @@ impl MyApp {
     pub fn is_read_only(&self) -> bool {
         matches!(self.connection_type, ConnectionType::VictorHid)
     }
+
+    /// Whether a mode button should appear in the control panel for the current connection.
+    pub fn mode_visible_in_ui(&self, mode: MeterMode) -> bool {
+        match mode {
+            MeterMode::Duty => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    matches!(self.connection_type, ConnectionType::VictorHid)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    false
+                }
+            }
+            _ => true,
+        }
+    }
 }

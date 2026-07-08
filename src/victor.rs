@@ -200,7 +200,7 @@ fn mode_from_flags(flags: &Fs9922Flags) -> Option<(MeterMode, &'static str)> {
         return Some((MeterMode::Diod, "V"));
     }
     if flags.is_percent {
-        return Some((MeterMode::Freq, "Hz")); // duty cycle; closest existing mode
+        return Some((MeterMode::Duty, "%"));
     }
     if flags.is_volt {
         if flags.is_ac {
@@ -284,6 +284,29 @@ mod tests {
         pkt[12] = b'X';
         pkt[13] = b'Y';
         assert!(parse_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn parses_duty_cycle_reading() {
+        let mut pkt = [0u8; PACKET_LEN];
+        pkt[0] = b'+';
+        pkt[1] = b'5';
+        pkt[2] = b'2';
+        pkt[3] = b'3';
+        pkt[4] = b'0';
+        pkt[6] = b'2'; // two decimal places -> 52.30
+        pkt[9] = 1 << 1; // duty cycle (%)
+        pkt[12] = b'\r';
+        pkt[13] = b'\n';
+
+        let reading = parse_packet(&pkt).unwrap();
+        assert!(
+            (reading.value - 52.3).abs() < 1e-6,
+            "expected 52.3, got {}",
+            reading.value
+        );
+        assert_eq!(reading.mode, MeterMode::Duty);
+        assert_eq!(reading.unit, "%");
     }
 
     #[test]
