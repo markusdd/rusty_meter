@@ -11,6 +11,23 @@ use crate::multimeter::{MeterMode, RateCmd, ScpiMode};
 
 const SERIAL_TOKEN: Token = Token(0);
 
+fn default_unit_for_mode(mode: MeterMode) -> String {
+    match mode {
+        MeterMode::Vdc => "VDC".to_owned(),
+        MeterMode::Vac => "VAC".to_owned(),
+        MeterMode::Adc => "ADC".to_owned(),
+        MeterMode::Aac => "AAC".to_owned(),
+        MeterMode::Res => "Ohm".to_owned(),
+        MeterMode::Cap => "F".to_owned(),
+        MeterMode::Freq => "Hz".to_owned(),
+        MeterMode::Per => "s".to_owned(),
+        MeterMode::Duty => "%".to_owned(),
+        MeterMode::Diod => "V".to_owned(),
+        MeterMode::Cont => "Ohm".to_owned(),
+        MeterMode::Temp => "°C".to_owned(),
+    }
+}
+
 impl super::MyApp {
     pub fn spawn_serial_task(&mut self) {
         if self.serial.is_none() {
@@ -19,7 +36,7 @@ impl super::MyApp {
 
         let (tx_data, rx_data) = mpsc::channel::<Option<f64>>(100); // Channel for measurements
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // Channel for commands
-        let (tx_mode, rx_mode) = mpsc::channel::<MeterMode>(10); // Channel for mode updates
+        let (tx_mode, rx_mode) = mpsc::channel::<(MeterMode, String)>(10);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>(); // Shutdown signal
         self.serial_rx = Some(rx_data);
         self.serial_tx = Some(tx_cmd.clone());
@@ -257,7 +274,8 @@ impl super::MyApp {
                                                                 };
                                                                 if mode != last_mode {
                                                                     last_mode = mode;
-                                                                    let _ = tx_mode.send(mode).await;
+                                                                    let unit = default_unit_for_mode(mode);
+                                                                    let _ = tx_mode.send((mode, unit)).await;
                                                                     if mode == MeterMode::Cont {
                                                                         if beeper_enabled {
                                                                             command_queue.push_back("SYST:BEEP:STATe ON\n".to_string());

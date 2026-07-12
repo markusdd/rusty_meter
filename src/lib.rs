@@ -7,3 +7,5 @@ mod helpers;
 mod multimeter;
 #[cfg(not(target_arch = "wasm32"))]
 mod victor;
+#[cfg(not(target_arch = "wasm32"))]
+mod victor_es519xx;

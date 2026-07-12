@@ -45,7 +45,7 @@ impl super::MyApp {
 
     pub fn spawn_hid_task(&mut self) {
         let (tx_data, rx_data) = mpsc::channel::<Option<f64>>(100);
-        let (tx_mode, rx_mode) = mpsc::channel::<MeterMode>(10);
+        let (tx_mode, rx_mode) = mpsc::channel::<(MeterMode, String)>(10);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
         self.serial_rx = Some(rx_data);
@@ -129,7 +129,7 @@ impl super::MyApp {
                             let _ = tx_data.blocking_send(Some(reading.value));
                             if last_mode != Some(reading.mode) {
                                 last_mode = Some(reading.mode);
-                                let _ = tx_mode.blocking_send(reading.mode);
+                                let _ = tx_mode.blocking_send((reading.mode, reading.unit));
                             }
                         }
                     }

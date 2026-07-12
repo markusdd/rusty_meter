@@ -133,62 +133,28 @@ impl super::MyApp {
         }
 
         // Process all available mode updates
+        let read_only = self.is_read_only();
         if let Some(ref mut rx) = self.mode_rx {
-            while let Ok(mode) = rx.try_recv() {
+            while let Ok((mode, unit)) = rx.try_recv() {
                 if mode != self.metermode {
                     self.metermode = mode;
+                    self.curr_unit = unit;
                     self.values = VecDeque::with_capacity(self.mem_depth);
                     self.hist_values = VecDeque::with_capacity(self.hist_mem_depth); // Reset histogram buffer
-                    match mode {
-                        MeterMode::Vdc => {
-                            self.curr_unit = "VDC".to_owned();
-                            self.rangecmd = RangeCmd::new(&self.curr_meter, "VDC");
+                    self.rangecmd = if read_only {
+                        None
+                    } else {
+                        match mode {
+                            MeterMode::Vdc => RangeCmd::new(&self.curr_meter, "VDC"),
+                            MeterMode::Vac => RangeCmd::new(&self.curr_meter, "VAC"),
+                            MeterMode::Adc => RangeCmd::new(&self.curr_meter, "ADC"),
+                            MeterMode::Aac => RangeCmd::new(&self.curr_meter, "AAC"),
+                            MeterMode::Res => RangeCmd::new(&self.curr_meter, "RES"),
+                            MeterMode::Cap => RangeCmd::new(&self.curr_meter, "CAP"),
+                            MeterMode::Temp => RangeCmd::new(&self.curr_meter, "TEMP"),
+                            _ => None,
                         }
-                        MeterMode::Vac => {
-                            self.curr_unit = "VAC".to_owned();
-                            self.rangecmd = RangeCmd::new(&self.curr_meter, "VAC");
-                        }
-                        MeterMode::Adc => {
-                            self.curr_unit = "ADC".to_owned();
-                            self.rangecmd = RangeCmd::new(&self.curr_meter, "ADC");
-                        }
-                        MeterMode::Aac => {
-                            self.curr_unit = "AAC".to_owned();
-                            self.rangecmd = RangeCmd::new(&self.curr_meter, "AAC");
-                        }
-                        MeterMode::Res => {
-                            self.curr_unit = "Ohm".to_owned();
-                            self.rangecmd = RangeCmd::new(&self.curr_meter, "RES");
-                        }
-                        MeterMode::Cap => {
-                            self.curr_unit = "F".to_owned();
-                            self.rangecmd = RangeCmd::new(&self.curr_meter, "CAP");
-                        }
-                        MeterMode::Freq => {
-                            self.curr_unit = "Hz".to_owned();
-                            self.rangecmd = None;
-                        }
-                        MeterMode::Per => {
-                            self.curr_unit = "s".to_owned();
-                            self.rangecmd = None;
-                        }
-                        MeterMode::Duty => {
-                            self.curr_unit = "%".to_owned();
-                            self.rangecmd = None;
-                        }
-                        MeterMode::Diod => {
-                            self.curr_unit = "V".to_owned();
-                            self.rangecmd = None;
-                        }
-                        MeterMode::Cont => {
-                            self.curr_unit = "Ohm".to_owned();
-                            self.rangecmd = None;
-                        }
-                        MeterMode::Temp => {
-                            self.curr_unit = "°C".to_owned();
-                            self.rangecmd = RangeCmd::new(&self.curr_meter, "TEMP");
-                        }
-                    }
+                    };
                     self.curr_range = 0;
                     if self.value_debug {
                         println!("Updated metermode to: {:?}", mode);
@@ -262,25 +228,47 @@ impl super::MyApp {
                         ui.label("Connection:");
                         egui::ComboBox::from_id_salt("connection_type")
                             .selected_text(match self.connection_type {
-                                super::ConnectionType::Serial => "SCPI Serial",
-                                super::ConnectionType::VictorHid => "Victor USB HID",
+                                super::ConnectionType::Serial => "SCPI Serial (OWON)",
+                                super::ConnectionType::VictorHid => "Victor USB HID (86B/C/D)",
+                                super::ConnectionType::VictorSerial => "Victor Serial (86E)",
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.connection_type,
                                     super::ConnectionType::Serial,
-                                    "SCPI Serial",
+                                    "SCPI Serial (OWON)",
                                 );
                                 ui.selectable_value(
                                     &mut self.connection_type,
                                     super::ConnectionType::VictorHid,
-                                    "Victor USB HID",
+                                    "Victor USB HID (86B/C/D)",
+                                );
+                                ui.selectable_value(
+                                    &mut self.connection_type,
+                                    super::ConnectionType::VictorSerial,
+                                    "Victor Serial (86E)",
                                 );
                             });
                     }
 
                     match self.connection_type {
+                        #[cfg(target_arch = "wasm32")]
                         super::ConnectionType::Serial => {
+                            ui.label("Serial port:");
+                            ui.add(
+                                DropDownBox::from_iter(
+                                    &self.portlist,
+                                    "portlistbox",
+                                    &mut self.serial_port,
+                                    |ui, text| ui.selectable_label(false, text),
+                                )
+                                .desired_width(150.0)
+                                .select_on_focus(true)
+                                .filter_by_input(false),
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        super::ConnectionType::Serial | super::ConnectionType::VictorSerial => {
                             ui.label("Serial port:");
                             ui.add(
                                 DropDownBox::from_iter(
@@ -379,9 +367,45 @@ impl super::MyApp {
                                         } else {
                                             self.connection_state =
                                                 super::ConnectionState::Connected;
-                                            self.curr_meter = "Victor 86 series".to_owned();
+                                            self.curr_meter = "Victor 86B/C/D".to_owned();
                                             self.rangecmd = None;
                                             self.spawn_hid_task();
+                                        }
+                                    }
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    super::ConnectionType::VictorSerial => {
+                                        match mio_serial::new(
+                                            &self.serial_port,
+                                            crate::victor_es519xx::VICTOR_86E_BAUD,
+                                        )
+                                        .open_native_async()
+                                        {
+                                            Ok(serial) => {
+                                                self.serial = Some(serial);
+                                                if let Some(ref mut serial) = self.serial {
+                                                    let _ = serial
+                                                        .set_data_bits(DataBits::Seven);
+                                                    let _ = serial.set_stop_bits(
+                                                        mio_serial::StopBits::One,
+                                                    );
+                                                    let _ = serial.set_parity(
+                                                        mio_serial::Parity::Odd,
+                                                    );
+                                                    self.connection_state =
+                                                        super::ConnectionState::Connected;
+                                                    self.curr_meter = "Victor 86E".to_owned();
+                                                    self.rangecmd = None;
+                                                    self.spawn_victor_serial_task();
+                                                }
+                                            }
+                                            Err(e) => {
+                                                self.connection_state =
+                                                    super::ConnectionState::Disconnected;
+                                                self.connection_error = Some(format!(
+                                                    "Failed to connect: {}",
+                                                    e
+                                                ));
+                                            }
                                         }
                                     }
                                 }

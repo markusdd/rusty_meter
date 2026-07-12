@@ -16,18 +16,29 @@ use crate::multimeter::{MeterMode, RangeCmd, RateCmd, ScpiMode};
 // Submodules for split impl blocks
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
+#[cfg(not(target_arch = "wasm32"))]
+mod victor_serial;
 mod graph;
 mod recording;
 mod serial;
 mod settings;
 mod ui;
 
+/// How rusty_meter talks to the multimeter.
+///
+/// - `Serial` — SCPI over UART (OWON XDM series, remote control)
+/// - `VictorHid` — Victor 86B/C/D via USB HID + FS9922 cable protocol (read only)
+/// - `VictorSerial` — Victor 86E via CP2102 UART + ES51932 ASCII frames (read only)
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ConnectionType {
     #[default]
     Serial,
+    /// Victor 86B/C/D: USB HID, Fortune FS9922-DMM4. See `victor` module / sigrok wiki.
     #[cfg(not(target_arch = "wasm32"))]
     VictorHid,
+    /// Victor 86E: CP2102 serial 19200 7o1, Cyrustek ES51932. See `victor_es519xx` module.
+    #[cfg(not(target_arch = "wasm32"))]
+    VictorSerial,
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -171,7 +182,7 @@ pub struct MyApp {
     #[serde(skip)]
     shutdown_tx: Option<oneshot::Sender<()>>, // Signal to shutdown serial task
     #[serde(skip)]
-    mode_rx: Option<mpsc::Receiver<MeterMode>>, // Channel for mode updates
+    mode_rx: Option<mpsc::Receiver<(MeterMode, String)>>, // Channel for mode + unit updates
     #[serde(skip)]
     value_debug_shared: Arc<Mutex<bool>>, // Shared debug flag for live updates
     #[serde(skip)]
@@ -427,7 +438,17 @@ impl MyApp {
     }
 
     pub fn is_read_only(&self) -> bool {
-        matches!(self.connection_type, ConnectionType::VictorHid)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            matches!(
+                self.connection_type,
+                ConnectionType::VictorHid | ConnectionType::VictorSerial
+            )
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// Whether a mode button should appear in the control panel for the current connection.
@@ -436,7 +457,10 @@ impl MyApp {
             MeterMode::Duty => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    matches!(self.connection_type, ConnectionType::VictorHid)
+                    matches!(
+                        self.connection_type,
+                        ConnectionType::VictorHid | ConnectionType::VictorSerial
+                    )
                 }
                 #[cfg(target_arch = "wasm32")]
                 {

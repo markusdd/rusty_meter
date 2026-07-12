@@ -1,6 +1,15 @@
-//! Victor (RuoShui) 86-series USB HID protocol support.
-//! Deobfuscation followed by Fortune Semiconductor FS9922-DMM4
-//! chip packet decode.
+//! Victor (RuoShui) 86B/C/D USB HID protocol support.
+//!
+//! These meters use a USB HID interface (VID 0x1244, PID 0xd237) with obfuscated
+//! 14-byte reports from the USB cable. After deobfuscation the payload follows the
+//! Fortune Semiconductor FS9922-DMM4 chip format. Read only — modes are set on the meter.
+//!
+//! For the Victor 86E (CP2102 serial / ES51932) see `victor_es519xx` instead.
+//!
+//! ## Sources
+//!
+//! - <https://sigrok.org/wiki/Victor_protocol>
+//! - libsigrok `serial_hid_victor.c` and `fs9922.c`
 
 use crate::multimeter::MeterMode;
 
