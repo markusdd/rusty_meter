@@ -19,9 +19,7 @@ impl super::MyApp {
                         let path = device.path().to_string_lossy().into_owned();
                         let label = format!(
                             "{} {} ({:04x}:{:04x})",
-                            device
-                                .manufacturer_string()
-                                .unwrap_or("Victor"),
+                            device.manufacturer_string().unwrap_or("Victor"),
                             device.product_string().unwrap_or("Multimeter"),
                             device.vendor_id(),
                             device.product_id(),
@@ -121,10 +119,7 @@ impl super::MyApp {
                         }
                         if let Some(reading) = victor::parse_hid_buffer(&readbuf[..len]) {
                             if *value_debug_shared.lock().unwrap() {
-                                println!(
-                                    "Victor reading: {} {:?}",
-                                    reading.value, reading.mode
-                                );
+                                println!("Victor reading: {} {:?}", reading.value, reading.mode);
                             }
                             let _ = tx_data.blocking_send(Some(reading.value));
                             if last_mode != Some(reading.mode) {

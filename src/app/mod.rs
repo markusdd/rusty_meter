@@ -14,15 +14,15 @@ use tokio::sync::{mpsc, oneshot};
 use crate::multimeter::{MeterMode, RangeCmd, RateCmd, ScpiMode};
 
 // Submodules for split impl blocks
+mod graph;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
-#[cfg(not(target_arch = "wasm32"))]
-mod victor_serial;
-mod graph;
 mod recording;
 mod serial;
 mod settings;
 mod ui;
+#[cfg(not(target_arch = "wasm32"))]
+mod victor_serial;
 
 /// How rusty_meter talks to the multimeter.
 ///

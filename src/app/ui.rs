@@ -333,11 +333,9 @@ impl super::MyApp {
                                             Ok(serial) => {
                                                 self.serial = Some(serial);
                                                 if let Some(ref mut serial) = self.serial {
-                                                    let _ =
-                                                        serial.set_data_bits(DataBits::Eight);
-                                                    let _ = serial.set_stop_bits(
-                                                        mio_serial::StopBits::One,
-                                                    );
+                                                    let _ = serial.set_data_bits(DataBits::Eight);
+                                                    let _ = serial
+                                                        .set_stop_bits(mio_serial::StopBits::One);
                                                     let _ =
                                                         serial.set_parity(mio_serial::Parity::None);
                                                     self.connection_state =
@@ -349,10 +347,8 @@ impl super::MyApp {
                                             Err(e) => {
                                                 self.connection_state =
                                                     super::ConnectionState::Disconnected;
-                                                self.connection_error = Some(format!(
-                                                    "Failed to connect: {}",
-                                                    e
-                                                ));
+                                                self.connection_error =
+                                                    Some(format!("Failed to connect: {}", e));
                                             }
                                         }
                                     }
@@ -361,9 +357,8 @@ impl super::MyApp {
                                         if self.hid_device_path.is_empty() {
                                             self.connection_state =
                                                 super::ConnectionState::Disconnected;
-                                            self.connection_error = Some(
-                                                "No Victor HID device selected".to_owned(),
-                                            );
+                                            self.connection_error =
+                                                Some("No Victor HID device selected".to_owned());
                                         } else {
                                             self.connection_state =
                                                 super::ConnectionState::Connected;
@@ -383,14 +378,11 @@ impl super::MyApp {
                                             Ok(serial) => {
                                                 self.serial = Some(serial);
                                                 if let Some(ref mut serial) = self.serial {
+                                                    let _ = serial.set_data_bits(DataBits::Seven);
                                                     let _ = serial
-                                                        .set_data_bits(DataBits::Seven);
-                                                    let _ = serial.set_stop_bits(
-                                                        mio_serial::StopBits::One,
-                                                    );
-                                                    let _ = serial.set_parity(
-                                                        mio_serial::Parity::Odd,
-                                                    );
+                                                        .set_stop_bits(mio_serial::StopBits::One);
+                                                    let _ =
+                                                        serial.set_parity(mio_serial::Parity::Odd);
                                                     self.connection_state =
                                                         super::ConnectionState::Connected;
                                                     self.curr_meter = "Victor 86E".to_owned();
@@ -401,10 +393,8 @@ impl super::MyApp {
                                             Err(e) => {
                                                 self.connection_state =
                                                     super::ConnectionState::Disconnected;
-                                                self.connection_error = Some(format!(
-                                                    "Failed to connect: {}",
-                                                    e
-                                                ));
+                                                self.connection_error =
+                                                    Some(format!("Failed to connect: {}", e));
                                             }
                                         }
                                     }
@@ -543,155 +533,159 @@ impl super::MyApp {
                     ui.vertical(|ui| {
                         if self.is_read_only() {
                             ui.label(
-                                egui::RichText::new(
-                                    "Read only — change mode on the meter",
-                                )
-                                .italics(),
+                                egui::RichText::new("Read only — change mode on the meter")
+                                    .italics(),
                             );
                         }
                         let btn_size = Vec2 { x: 70.0, y: 20.0 };
                         let read_only = self.is_read_only();
                         ui.add_enabled_ui(!read_only, |ui| {
-                        ui.horizontal(|ui| {
-                            let vdc_btn = egui::Button::new("VDC")
-                                .selected(self.metermode == MeterMode::Vdc)
-                                .min_size(btn_size);
-                            if ui.add(vdc_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Vdc,
-                                    "VDC",
-                                    "CONF:VOLT:DC AUTO\n",
-                                    Some("VDC"),
-                                    None,
-                                );
-                            }
-                            let vac_btn = egui::Button::new("VAC")
-                                .selected(self.metermode == MeterMode::Vac)
-                                .min_size(btn_size);
-                            if ui.add(vac_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Vac,
-                                    "VAC",
-                                    "CONF:VOLT:AC AUTO\n",
-                                    Some("VAC"),
-                                    None,
-                                );
-                            }
-                            let adc_btn = egui::Button::new("ADC")
-                                .selected(self.metermode == MeterMode::Adc)
-                                .min_size(btn_size);
-                            if ui.add(adc_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Adc,
-                                    "ADC",
-                                    "CONF:CURR:DC AUTO\n",
-                                    Some("ADC"),
-                                    None,
-                                );
-                            }
-                            let aac_btn = egui::Button::new("AAC")
-                                .selected(self.metermode == MeterMode::Aac)
-                                .min_size(btn_size);
-                            if ui.add(aac_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Aac,
-                                    "AAC",
-                                    "CONF:CURR:AC AUTO\n",
-                                    Some("AAC"),
-                                    None,
-                                );
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            let res_btn = egui::Button::new("Ohm")
-                                .selected(self.metermode == MeterMode::Res)
-                                .min_size(btn_size);
-                            if ui.add(res_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Res,
-                                    "Ohm",
-                                    "CONF:RES AUTO\n",
-                                    Some("RES"),
-                                    None,
-                                );
-                            }
-                            let cap_btn = egui::Button::new("C")
-                                .selected(self.metermode == MeterMode::Cap)
-                                .min_size(btn_size);
-                            if ui.add(cap_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Cap,
-                                    "F",
-                                    "CONF:CAP AUTO\n",
-                                    Some("CAP"),
-                                    None,
-                                );
-                            }
-                            let freq_btn = egui::Button::new("Freq")
-                                .selected(self.metermode == MeterMode::Freq)
-                                .min_size(btn_size);
-                            if ui.add(freq_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Freq,
-                                    "Hz",
-                                    "CONF:FREQ\n",
-                                    Some("FREQ"),
-                                    None,
-                                );
-                            }
-                            let per_btn = egui::Button::new("Period")
-                                .selected(self.metermode == MeterMode::Per)
-                                .min_size(btn_size);
-                            if ui.add(per_btn).clicked() {
-                                self.set_mode(MeterMode::Per, "s", "CONF:PER\n", Some("PER"), None);
-                            }
-                            if self.mode_visible_in_ui(MeterMode::Duty) {
-                                let duty_btn = egui::Button::new("Duty")
-                                    .selected(self.metermode == MeterMode::Duty)
+                            ui.horizontal(|ui| {
+                                let vdc_btn = egui::Button::new("VDC")
+                                    .selected(self.metermode == MeterMode::Vdc)
                                     .min_size(btn_size);
-                                if ui.add(duty_btn).clicked() {
-                                    self.set_mode(MeterMode::Duty, "%", "", None, None);
+                                if ui.add(vdc_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Vdc,
+                                        "VDC",
+                                        "CONF:VOLT:DC AUTO\n",
+                                        Some("VDC"),
+                                        None,
+                                    );
                                 }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            let diod_btn = egui::Button::new("Diode")
-                                .selected(self.metermode == MeterMode::Diod)
-                                .min_size(btn_size);
-                            if ui.add(diod_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Diod,
-                                    "V",
-                                    "CONF:DIOD\n",
-                                    Some("DIOD"),
-                                    Some(self.beeper_enabled),
-                                );
-                            }
-                            let cont_btn = egui::Button::new("Cont")
-                                .selected(self.metermode == MeterMode::Cont)
-                                .min_size(btn_size);
-                            if ui.add(cont_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Cont,
-                                    "Ohm",
-                                    "CONF:CONT\n",
-                                    Some("CONT"),
-                                    Some(self.beeper_enabled),
-                                );
-                            }
-                            let temp_btn = egui::Button::new("Temp")
-                                .selected(self.metermode == MeterMode::Temp)
-                                .min_size(btn_size);
-                            if ui.add(temp_btn).clicked() {
-                                self.set_mode(
-                                    MeterMode::Temp,
-                                    "°C",
-                                    "CONF:TEMP:RTD PT100\n",
-                                    Some("TEMP"),
-                                    None,
-                                );
-                            }
-                        });
+                                let vac_btn = egui::Button::new("VAC")
+                                    .selected(self.metermode == MeterMode::Vac)
+                                    .min_size(btn_size);
+                                if ui.add(vac_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Vac,
+                                        "VAC",
+                                        "CONF:VOLT:AC AUTO\n",
+                                        Some("VAC"),
+                                        None,
+                                    );
+                                }
+                                let adc_btn = egui::Button::new("ADC")
+                                    .selected(self.metermode == MeterMode::Adc)
+                                    .min_size(btn_size);
+                                if ui.add(adc_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Adc,
+                                        "ADC",
+                                        "CONF:CURR:DC AUTO\n",
+                                        Some("ADC"),
+                                        None,
+                                    );
+                                }
+                                let aac_btn = egui::Button::new("AAC")
+                                    .selected(self.metermode == MeterMode::Aac)
+                                    .min_size(btn_size);
+                                if ui.add(aac_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Aac,
+                                        "AAC",
+                                        "CONF:CURR:AC AUTO\n",
+                                        Some("AAC"),
+                                        None,
+                                    );
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                let res_btn = egui::Button::new("Ohm")
+                                    .selected(self.metermode == MeterMode::Res)
+                                    .min_size(btn_size);
+                                if ui.add(res_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Res,
+                                        "Ohm",
+                                        "CONF:RES AUTO\n",
+                                        Some("RES"),
+                                        None,
+                                    );
+                                }
+                                let cap_btn = egui::Button::new("C")
+                                    .selected(self.metermode == MeterMode::Cap)
+                                    .min_size(btn_size);
+                                if ui.add(cap_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Cap,
+                                        "F",
+                                        "CONF:CAP AUTO\n",
+                                        Some("CAP"),
+                                        None,
+                                    );
+                                }
+                                let freq_btn = egui::Button::new("Freq")
+                                    .selected(self.metermode == MeterMode::Freq)
+                                    .min_size(btn_size);
+                                if ui.add(freq_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Freq,
+                                        "Hz",
+                                        "CONF:FREQ\n",
+                                        Some("FREQ"),
+                                        None,
+                                    );
+                                }
+                                let per_btn = egui::Button::new("Period")
+                                    .selected(self.metermode == MeterMode::Per)
+                                    .min_size(btn_size);
+                                if ui.add(per_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Per,
+                                        "s",
+                                        "CONF:PER\n",
+                                        Some("PER"),
+                                        None,
+                                    );
+                                }
+                                if self.mode_visible_in_ui(MeterMode::Duty) {
+                                    let duty_btn = egui::Button::new("Duty")
+                                        .selected(self.metermode == MeterMode::Duty)
+                                        .min_size(btn_size);
+                                    if ui.add(duty_btn).clicked() {
+                                        self.set_mode(MeterMode::Duty, "%", "", None, None);
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                let diod_btn = egui::Button::new("Diode")
+                                    .selected(self.metermode == MeterMode::Diod)
+                                    .min_size(btn_size);
+                                if ui.add(diod_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Diod,
+                                        "V",
+                                        "CONF:DIOD\n",
+                                        Some("DIOD"),
+                                        Some(self.beeper_enabled),
+                                    );
+                                }
+                                let cont_btn = egui::Button::new("Cont")
+                                    .selected(self.metermode == MeterMode::Cont)
+                                    .min_size(btn_size);
+                                if ui.add(cont_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Cont,
+                                        "Ohm",
+                                        "CONF:CONT\n",
+                                        Some("CONT"),
+                                        Some(self.beeper_enabled),
+                                    );
+                                }
+                                let temp_btn = egui::Button::new("Temp")
+                                    .selected(self.metermode == MeterMode::Temp)
+                                    .min_size(btn_size);
+                                if ui.add(temp_btn).clicked() {
+                                    self.set_mode(
+                                        MeterMode::Temp,
+                                        "°C",
+                                        "CONF:TEMP:RTD PT100\n",
+                                        Some("TEMP"),
+                                        None,
+                                    );
+                                }
+                            });
                         }); // add_enabled_ui
                     });
                 });
@@ -714,10 +708,7 @@ impl super::MyApp {
                         if self.is_read_only() {
                             ui.label("Mode/range controlled on device");
                             let mut auto_scale = self.auto_scale_units(&self.metermode);
-                            if ui
-                                .checkbox(&mut auto_scale, "Auto-scale units")
-                                .changed()
-                            {
+                            if ui.checkbox(&mut auto_scale, "Auto-scale units").changed() {
                                 self.set_auto_scale_units(self.metermode, auto_scale);
                             }
                             return;
