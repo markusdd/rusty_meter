@@ -11,8 +11,8 @@ use std::{
     io::{self, Read},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -20,7 +20,7 @@ use std::{
 use mio::{Events, Interest, Poll, Token};
 use mio_serial::{ClearBuffer, SerialPort};
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep_until, Instant};
+use tokio::time::{Instant, sleep_until};
 
 use crate::multimeter::MeterMode;
 use crate::victor_86bcd_capture::{self, Victor86bcdCaptureJob};
@@ -131,13 +131,16 @@ impl Decoder {
         }
 
         match (self, dispatch) {
-            (Self::Es519xx { packet_buf, last_mode }, TaskDispatch::Es519xx { tx_value, tx_mode }) => {
+            (
+                Self::Es519xx {
+                    packet_buf,
+                    last_mode,
+                },
+                TaskDispatch::Es519xx { tx_value, tx_mode },
+            ) => {
                 for reading in victor_es519xx::feed_bytes(packet_buf, chunk) {
                     if debug {
-                        println!(
-                            "Victor 86E reading: {} {:?}",
-                            reading.value, reading.mode
-                        );
+                        println!("Victor 86E reading: {} {:?}", reading.value, reading.mode);
                     }
                     let _ = tx_value.send(Some(reading.value)).await;
                     if *last_mode != Some(reading.mode) {
@@ -420,13 +423,7 @@ impl super::MyApp {
                 self.serial_rx = Some(rx_value);
                 self.mode_rx = Some(rx_mode);
                 self.victor_86bcd_rx = None;
-                (
-                    TaskDispatch::Es519xx {
-                        tx_value,
-                        tx_mode,
-                    },
-                    None,
-                )
+                (TaskDispatch::Es519xx { tx_value, tx_mode }, None)
             }
             VictorReadonlyProtocol::Dm1107 => {
                 let (capture_tx, capture_rx) = mpsc::channel::<Victor86bcdCaptureJob>(8);

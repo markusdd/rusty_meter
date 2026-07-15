@@ -34,9 +34,7 @@ impl MyApp {
                     }
                 });
             if self.victor_86bcd_capture_function != prev_function {
-                self.victor_86bcd_capture_unit = self
-                    .victor_86bcd_capture_function
-                    .default_unit();
+                self.victor_86bcd_capture_unit = self.victor_86bcd_capture_function.default_unit();
             }
 
             ui.label("Unit:");
@@ -102,7 +100,7 @@ impl MyApp {
                 });
             self.victor_86bcd_capture_dp_after = match dp_choice {
                 0 => None,
-                n => Some((n - 1) as u8),
+                n => Some(n - 1),
             };
 
             let preview = LcdDisplay {

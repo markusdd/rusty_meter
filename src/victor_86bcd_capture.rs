@@ -562,7 +562,12 @@ pub fn latest_samples_by_key(text: &str) -> Vec<Victor86bcdCaptureRow> {
         latest.insert(row.context.sample_key(), row);
     }
     let mut out: Vec<_> = latest.into_values().collect();
-    out.sort_by(|a, b| a.context.display.sort_key().cmp(&b.context.display.sort_key()));
+    out.sort_by(|a, b| {
+        a.context
+            .display
+            .sort_key()
+            .cmp(&b.context.display.sort_key())
+    });
     out
 }
 

@@ -99,8 +99,15 @@ pub fn show_histogram(
     hist_mem_depth_max: usize,
 ) {
     // Format the latest measurement for display
-    let (_formatted_value, display_unit) =
-        crate::helpers::format_measurement(curr_meas, 10, 1_000_000.0, 0.0001, &metermode, false, None);
+    let (_formatted_value, display_unit) = crate::helpers::format_measurement(
+        curr_meas,
+        10,
+        1_000_000.0,
+        0.0001,
+        &metermode,
+        false,
+        None,
+    );
 
     // Create bar chart data
     let hist_values_vec: Vec<f64> = hist_values.iter().copied().collect();

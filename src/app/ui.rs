@@ -85,8 +85,7 @@ impl super::MyApp {
                     .step_by(1.0)
                     .clamping(SliderClamping::Always),
             );
-            if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus())
-            {
+            if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus()) {
                 if let Some(tx) = self.serial_tx.clone() {
                     let cmd = format!("CONT:THREshold {}\n", self.cont_threshold);
                     let value_debug = self.value_debug;
@@ -106,8 +105,7 @@ impl super::MyApp {
                     .step_by(0.1)
                     .clamping(SliderClamping::Always),
             );
-            if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus())
-            {
+            if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus()) {
                 if let Some(tx) = self.serial_tx.clone() {
                     let cmd = format!("DIOD:THREshold {}\n", self.diod_threshold);
                     let value_debug = self.value_debug;
@@ -570,12 +568,10 @@ impl super::MyApp {
                 // Determine if the background and shadow should be dark red based on mode and threshold
                 let is_below_threshold = match self.metermode {
                     MeterMode::Cont => {
-                        self.curr_meas.is_finite()
-                            && self.curr_meas <= self.cont_threshold as f64
+                        self.curr_meas.is_finite() && self.curr_meas <= self.cont_threshold as f64
                     }
                     MeterMode::Diod => {
-                        self.curr_meas.is_finite()
-                            && self.curr_meas <= self.diod_threshold as f64
+                        self.curr_meas.is_finite() && self.curr_meas <= self.diod_threshold as f64
                     }
                     _ => false,
                 };
@@ -612,20 +608,18 @@ impl super::MyApp {
                         |ui| {
                             #[cfg(not(target_arch = "wasm32"))]
                             let (formatted_value, display_unit) = {
-                                let lcd_override =
-                                    if self.connection_type
-                                        == super::ConnectionType::Victor86bcdSerial
-                                        && self.curr_meas
-                                            != crate::helpers::METER_OVERLOAD_VALUE
-                                        && !self.victor_lcd_display.is_empty()
-                                    {
-                                        Some((
-                                            self.victor_lcd_display.as_str(),
-                                            self.curr_unit.as_str(),
-                                        ))
-                                    } else {
-                                        None
-                                    };
+                                let lcd_override = if self.connection_type
+                                    == super::ConnectionType::Victor86bcdSerial
+                                    && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE
+                                    && !self.victor_lcd_display.is_empty()
+                                {
+                                    Some((
+                                        self.victor_lcd_display.as_str(),
+                                        self.curr_unit.as_str(),
+                                    ))
+                                } else {
+                                    None
+                                };
                                 let auto_scale =
                                     !self.is_read_only() && self.auto_scale_units(&self.metermode);
                                 format_measurement(
@@ -860,9 +854,7 @@ impl super::MyApp {
                 options_frame.show(ui, |ui| {
                     ui.vertical(|ui| {
                         if self.is_read_only() {
-                            ui.label(
-                                egui::RichText::new("Range controlled on device").italics(),
-                            );
+                            ui.label(egui::RichText::new("Range controlled on device").italics());
                             self.show_cont_diod_threshold_sliders(ui, false);
                             return;
                         }

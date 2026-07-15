@@ -113,7 +113,9 @@ fn main() {
 
     println!("--- Protocol ---");
     println!("  • DM1107 meter IC → opto isolation → CP2102 USB serial (9600 8N1).");
-    println!("  • 20-byte repeating frames: `a5 12` sync, 3-byte mode header, 4 digit bytes, tail `.. 04 ..`.");
+    println!(
+        "  • 20-byte repeating frames: `a5 12` sync, 3-byte mode header, 4 digit bytes, tail `.. 04 ..`."
+    );
     println!("  • Digit bytes: low 7 bits = segment map, bit 7 = decimal point (positions 0–2).");
     println!("  • `0x5f` = lit zero; `0x00` = off; `0x80` = DP only; `0xdf` = zero + DP.");
     println!("  • Mode annunciators are single bits across bytes 2–4 and 9 (V/m/DC/−/AUTO/…).");

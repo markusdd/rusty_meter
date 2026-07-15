@@ -117,9 +117,7 @@ impl super::MyApp {
                         if *value_debug_shared.lock().unwrap() {
                             println!("Victor HID received {} bytes", len);
                         }
-                        if let Some(reading) =
-                            victor_fs9922::parse_hid_buffer(&readbuf[..len])
-                        {
+                        if let Some(reading) = victor_fs9922::parse_hid_buffer(&readbuf[..len]) {
                             if *value_debug_shared.lock().unwrap() {
                                 println!("Victor reading: {} {:?}", reading.value, reading.mode);
                             }

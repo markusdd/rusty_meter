@@ -22,9 +22,9 @@ mod serial;
 mod settings;
 mod ui;
 #[cfg(not(target_arch = "wasm32"))]
-mod victor_readonly_serial;
-#[cfg(not(target_arch = "wasm32"))]
 mod victor_86bcd_capture_ui;
+#[cfg(not(target_arch = "wasm32"))]
+mod victor_readonly_serial;
 
 /// How rusty_meter talks to the multimeter.
 ///
@@ -247,10 +247,12 @@ pub struct MyApp {
     victor_86bcd_capture_duration_ms: u64,
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
-    victor_86bcd_capture_tx: Option<mpsc::Sender<crate::victor_86bcd_capture::Victor86bcdCaptureJob>>,
+    victor_86bcd_capture_tx:
+        Option<mpsc::Sender<crate::victor_86bcd_capture::Victor86bcdCaptureJob>>,
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
-    victor_86bcd_capture_status_shared: Arc<Mutex<crate::victor_86bcd_capture::Victor86bcdCaptureStatus>>,
+    victor_86bcd_capture_status_shared:
+        Arc<Mutex<crate::victor_86bcd_capture::Victor86bcdCaptureStatus>>,
     #[serde(skip)]
     last_graph_update: f64, // Track last graph update time
     #[serde(skip)]
@@ -353,11 +355,14 @@ impl Default for MyApp {
             value_debug_shared: Arc::new(Mutex::new(false)),
             poll_interval_shared: Arc::new(Mutex::new(20)),
             #[cfg(not(target_arch = "wasm32"))]
-            victor_86bcd_capture_function: crate::victor_86bcd_capture::Victor86bcdCaptureFunction::default(),
+            victor_86bcd_capture_function:
+                crate::victor_86bcd_capture::Victor86bcdCaptureFunction::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            victor_86bcd_capture_unit: crate::victor_86bcd_capture::Victor86bcdCaptureUnit::default(),
+            victor_86bcd_capture_unit: crate::victor_86bcd_capture::Victor86bcdCaptureUnit::default(
+            ),
             #[cfg(not(target_arch = "wasm32"))]
-            victor_86bcd_capture_dp_mode: crate::victor_86bcd_capture::Victor86bcdCaptureDpMode::default(),
+            victor_86bcd_capture_dp_mode:
+                crate::victor_86bcd_capture::Victor86bcdCaptureDpMode::default(),
             #[cfg(not(target_arch = "wasm32"))]
             victor_86bcd_capture_digits: [crate::victor_86bcd_capture::LcdDigit::Off; 4],
             #[cfg(not(target_arch = "wasm32"))]

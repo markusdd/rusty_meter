@@ -190,7 +190,11 @@ impl LcdAnnunciators {
             return (MeterFunction::Res, unit);
         }
         if self.volt {
-            let unit = if self.milli { MeterUnit::mV } else { MeterUnit::V };
+            let unit = if self.milli {
+                MeterUnit::mV
+            } else {
+                MeterUnit::V
+            };
             return if self.ac {
                 (MeterFunction::Vac, unit)
             } else {
@@ -400,11 +404,7 @@ fn decoded_mode_key(dm: &DecodedMode) -> String {
 }
 
 fn apply_negative_sign(text: &str, is_negative: bool) -> String {
-    if is_negative
-        && !text.is_empty()
-        && !text.starts_with('-')
-        && !is_overload_display(text)
-    {
+    if is_negative && !text.is_empty() && !text.starts_with('-') && !is_overload_display(text) {
         format!("-{text}")
     } else {
         text.to_owned()
@@ -515,10 +515,7 @@ pub fn format_digits(digits: &[DigitCell; 4]) -> DecodedReading {
         };
     }
     // RES `0.L`: d1 = zero+DP (`0xdf`), d2 = overload glyph (`0x0e`).
-    if digits[1].is_zero()
-        && digits[1].decimal_point()
-        && digits[2].segments() == 0x0e
-    {
+    if digits[1].is_zero() && digits[1].decimal_point() && digits[2].segments() == 0x0e {
         return DecodedReading {
             text: "0.L".to_owned(),
             confidence: 90,
@@ -654,9 +651,7 @@ mod tests {
 
     #[test]
     fn parses_vdc_manual_zero_frame() {
-        let raw = parse_hex_line(
-            "a5 12 04 00 40 5f 5f df 5f 42 00 00 00 00 00 00 00 0c 04 49",
-        );
+        let raw = parse_hex_line("a5 12 04 00 40 5f 5f df 5f 42 00 00 00 00 00 00 00 0c 04 49");
         let frame = parse_frame_at(&raw, 0).unwrap();
         assert_eq!(frame.mode.b2, 0x04);
         assert_eq!(frame.mode.b4, 0x40);
@@ -669,9 +664,7 @@ mod tests {
 
     #[test]
     fn parses_vdc_21_34_payload() {
-        let raw = parse_hex_line(
-            "a5 12 04 00 40 72 79 d0 3d 42 00 00 00 00 01 ff ff fc 04 34",
-        );
+        let raw = parse_hex_line("a5 12 04 00 40 72 79 d0 3d 42 00 00 00 00 01 ff ff fc 04 34");
         let frame = parse_frame_at(&raw, 0).unwrap();
         assert_eq!(frame.digits[0].segments(), 0x3d);
         assert!(frame.digits[1].decimal_point());
@@ -684,9 +677,7 @@ mod tests {
 
     #[test]
     fn decodes_vdc_auto_21_40_capture() {
-        let raw = parse_hex_line(
-            "a5 12 04 00 10 5f 72 d0 3d 42 00 00 00 00 01 ff ff fc 04 ea",
-        );
+        let raw = parse_hex_line("a5 12 04 00 10 5f 72 d0 3d 42 00 00 00 00 01 ff ff fc 04 ea");
         let frame = parse_frame_at(&raw, 0).unwrap();
         assert_eq!(frame.digits[0].segments(), 0x3d);
         assert_eq!(frame.digits[1].segments(), 0x50);
@@ -699,9 +690,18 @@ mod tests {
     #[test]
     fn decodes_manual_vdc_zero_layouts() {
         let cases = [
-            ("a5 12 04 00 40 5f 5f df 5f 42 00 00 00 00 00 00 00 0c 04 49", "00.00"),
-            ("a5 12 04 00 40 5f 5f 5f df 42 00 00 00 00 00 00 00 0c 04 49", "0.000"),
-            ("a5 12 04 00 40 5f df 5f 5f 42 00 00 00 00 00 00 00 0c 04 49", "000.0"),
+            (
+                "a5 12 04 00 40 5f 5f df 5f 42 00 00 00 00 00 00 00 0c 04 49",
+                "00.00",
+            ),
+            (
+                "a5 12 04 00 40 5f 5f 5f df 42 00 00 00 00 00 00 00 0c 04 49",
+                "0.000",
+            ),
+            (
+                "a5 12 04 00 40 5f df 5f 5f 42 00 00 00 00 00 00 00 0c 04 49",
+                "000.0",
+            ),
         ];
         for (hex, want) in cases {
             let raw = parse_hex_line(hex);
@@ -715,10 +715,13 @@ mod tests {
         let mv = parse_hex_line("a5 12 0c 00 10 5f df 5f 5f 42 00 00 00 00 00 00 00 0c 04 21");
         assert_eq!(find_frame(&mv).unwrap().decoded_mode.unit, MeterUnit::mV);
 
-        for (b2, unit) in [(0x20, MeterUnit::Ohm), (0x60, MeterUnit::kOhm), (0xa0, MeterUnit::MOhm)] {
-            let mut raw = parse_hex_line(
-                "a5 12 00 00 10 5f df 5f 5f 40 00 00 00 00 00 00 00 0c 04 33",
-            );
+        for (b2, unit) in [
+            (0x20, MeterUnit::Ohm),
+            (0x60, MeterUnit::kOhm),
+            (0xa0, MeterUnit::MOhm),
+        ] {
+            let mut raw =
+                parse_hex_line("a5 12 00 00 10 5f df 5f 5f 40 00 00 00 00 00 00 00 0c 04 33");
             raw[2] = b2;
             assert_eq!(find_frame(&raw).unwrap().decoded_mode.unit, unit);
         }
@@ -726,9 +729,7 @@ mod tests {
 
     #[test]
     fn diode_ol_overload_pattern() {
-        let raw = parse_hex_line(
-            "a5 12 04 00 04 00 0e 5f 80 40 ff ff ff ff ff ff ff fc 04 e5",
-        );
+        let raw = parse_hex_line("a5 12 04 00 04 00 0e 5f 80 40 ff ff ff ff ff ff ff fc 04 e5");
         let frame = find_frame(&raw).unwrap();
         assert_eq!(frame.display_kind, DisplayKind::Overload);
         assert!(frame.digits[0].is_dp_only());
@@ -739,9 +740,7 @@ mod tests {
 
     #[test]
     fn decodes_negative_vdc_auto_21_19() {
-        let raw = parse_hex_line(
-            "a5 12 04 00 10 7b 50 d0 3d 46 00 00 00 00 01 ff ff fe 04 ea",
-        );
+        let raw = parse_hex_line("a5 12 04 00 10 7b 50 d0 3d 46 00 00 00 00 01 ff ff fe 04 ea");
         let frame = parse_frame_at(&raw, 0).unwrap();
         assert_eq!(frame.delimiter, 0x46);
         assert!(frame.decoded_mode.is_negative);
@@ -752,10 +751,7 @@ mod tests {
         let (mode, unit) = meter_mode_and_unit(&frame.decoded_mode);
         assert_eq!(mode, MeterMode::Vdc);
         assert_eq!(unit, "VDC");
-        assert_eq!(
-            parse_display_value(&reading.text, mode),
-            Some(-21.19)
-        );
+        assert_eq!(parse_display_value(&reading.text, mode), Some(-21.19));
     }
 
     #[test]
@@ -834,9 +830,7 @@ mod tests {
     #[test]
     fn decodes_digit_six() {
         // CAP µF capture: segment 0x6f = digit 6 (distinct from 0x7d seen elsewhere).
-        let raw = parse_hex_line(
-            "a5 12 01 80 10 6f bd 6f 72 40 00 03 ff ff ff ff ff fc 04 93",
-        );
+        let raw = parse_hex_line("a5 12 01 80 10 6f bd 6f 72 40 00 03 ff ff ff ff ff fc 04 93");
         let frame = parse_frame_at(&raw, 0).unwrap();
         assert_eq!(frame.decoded_mode.function, MeterFunction::Cap);
         assert_eq!(frame.decoded_mode.unit, MeterUnit::uF);
@@ -845,9 +839,7 @@ mod tests {
 
     #[test]
     fn temp_shows_trailing_digits() {
-        let raw = parse_hex_line(
-            "a5 12 00 20 00 5f 79 5f 5f 40 00 00 00 00 00 00 00 0c 04 bd",
-        );
+        let raw = parse_hex_line("a5 12 00 20 00 5f 79 5f 5f 40 00 00 00 00 00 00 00 0c 04 bd");
         let frame = find_frame(&raw).unwrap();
         assert!(frame.digits[0].is_zero());
         assert!(frame.digits[1].is_zero());
@@ -866,9 +858,7 @@ mod tests {
 
     #[test]
     fn feed_bytes_emits_mode_and_display() {
-        let frame = parse_hex_line(
-            "a5 12 04 00 10 5f 72 d0 3d 42 00 00 00 00 01 ff ff fc 04 ea",
-        );
+        let frame = parse_hex_line("a5 12 04 00 10 5f 72 d0 3d 42 00 00 00 00 01 ff ff fc 04 ea");
         let mut stream = Dm1107Stream::new();
         let updates = feed_bytes(&mut stream, &frame);
         assert_eq!(updates.len(), 1);
@@ -881,25 +871,22 @@ mod tests {
 
     #[test]
     fn cont_open_line_decodes_as_ol() {
-        let raw = parse_hex_line(
-            "a5 12 20 00 08 00 8e 5f 00 40 ff ff ff ff ff ff ff fc 04 05",
-        );
+        let raw = parse_hex_line("a5 12 20 00 08 00 8e 5f 00 40 ff ff ff ff ff ff ff fc 04 05");
         let frame = find_frame(&raw).unwrap();
         assert_eq!(frame.decoded_mode.function, MeterFunction::Cont);
         let reading = decode_frame(&frame);
         assert_eq!(reading.text, "OL");
         assert!(is_overload_display(&reading.text));
-        assert_eq!(parse_display_value(&reading.text, MeterMode::Cont), Some(METER_OVERLOAD_VALUE));
+        assert_eq!(
+            parse_display_value(&reading.text, MeterMode::Cont),
+            Some(METER_OVERLOAD_VALUE)
+        );
     }
 
     #[test]
     fn feed_bytes_emits_on_mode_change() {
-        let vdc = parse_hex_line(
-            "a5 12 04 00 10 5f 72 d0 3d 42 00 00 00 00 01 ff ff fc 04 ea",
-        );
-        let cap = parse_hex_line(
-            "a5 12 01 40 10 5f 5f 5f 5f 42 00 00 00 00 00 00 00 0c 04 00",
-        );
+        let vdc = parse_hex_line("a5 12 04 00 10 5f 72 d0 3d 42 00 00 00 00 01 ff ff fc 04 ea");
+        let cap = parse_hex_line("a5 12 01 40 10 5f 5f 5f 5f 42 00 00 00 00 00 00 00 0c 04 00");
         let mut stream = Dm1107Stream::new();
         assert_eq!(feed_bytes(&mut stream, &vdc).len(), 1);
         let cap_updates = feed_bytes(&mut stream, &cap);
