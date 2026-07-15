@@ -53,10 +53,6 @@ impl VictorReadonlyProtocol {
             Self::Dm1107 => "Victor 86B/C/D serial task started (DM1107, 9600 8N1)",
         }
     }
-
-    fn assert_dtr(self) -> bool {
-        matches!(self, Self::Dm1107)
-    }
 }
 
 struct ActiveCapture {
@@ -317,9 +313,8 @@ async fn run_serial_loop(
     device_shared: Arc<std::sync::Mutex<String>>,
 ) {
     let _ = serial.clear(ClearBuffer::Input);
-    if protocol.assert_dtr() {
-        let _ = serial.write_data_terminal_ready(true);
-    }
+    // Harmless on 86E if ignored; required on some 86B/C/D CP2102 links.
+    let _ = serial.write_data_terminal_ready(true);
 
     if *value_debug_shared.lock().unwrap() {
         println!("{}", protocol.startup_log());
