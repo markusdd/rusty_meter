@@ -22,10 +22,9 @@ mod serial;
 mod settings;
 mod ui;
 #[cfg(not(target_arch = "wasm32"))]
-mod victor_86bcd_serial;
+mod victor_readonly_serial;
 #[cfg(not(target_arch = "wasm32"))]
 mod victor_86bcd_capture_ui;
-mod victor_86e_serial;
 
 /// How rusty_meter talks to the multimeter.
 ///
