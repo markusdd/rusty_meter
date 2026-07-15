@@ -100,7 +100,7 @@ pub fn show_histogram(
 ) {
     // Format the latest measurement for display
     let (_formatted_value, display_unit) =
-        crate::helpers::format_measurement(curr_meas, 10, 1_000_000.0, 0.0001, &metermode, false);
+        crate::helpers::format_measurement(curr_meas, 10, 1_000_000.0, 0.0001, &metermode, false, None);
 
     // Create bar chart data
     let hist_values_vec: Vec<f64> = hist_values.iter().copied().collect();
@@ -171,6 +171,7 @@ pub fn show_histogram(
                 0.0001,
                 &metermode,
                 false,
+                None,
             );
             let chart_name = format!(
                 "  Samples: {}\nBin Width: {} {}\n      Min: {}\n      Max: {}",
@@ -218,6 +219,7 @@ pub fn show_histogram(
                     0.0001,
                     &metermode,
                     false,
+                    None,
                 );
                 let (formatted_end, _) = crate::helpers::format_measurement(
                     bin_end,
@@ -226,6 +228,7 @@ pub fn show_histogram(
                     0.0001,
                     &metermode,
                     false,
+                    None,
                 );
                 // Sample count is the bar's value (height)
                 let sample_count = bar.value as usize;

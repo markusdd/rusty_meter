@@ -27,6 +27,7 @@ impl super::MyApp {
                             self.value_debug = value_debug;
                             *self.value_debug_shared.lock().unwrap() = value_debug;
                         }
+
                         ui.label("Baud rate:");
                         ui.add(
                             TextEdit::singleline(&mut self.baud_rate.to_string())

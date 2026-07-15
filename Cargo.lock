@@ -4141,7 +4141,6 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
- "subprocess",
  "tempfile",
  "tokio",
  "urlencoding",
@@ -4474,16 +4473,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
 dependencies = [
  "float-cmp",
-]
-
-[[package]]
-name = "subprocess"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3713691ac66e56ba6bafb8a62158859653b3127ae5cacae98d437bbb0c9ccb06"
-dependencies = [
- "libc",
- "winapi",
 ]
 
 [[package]]

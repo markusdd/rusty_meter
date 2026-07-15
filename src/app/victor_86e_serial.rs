@@ -17,7 +17,7 @@ use crate::victor_es519xx;
 const SERIAL_TOKEN: Token = Token(1);
 
 impl super::MyApp {
-    pub fn spawn_victor_serial_task(&mut self) {
+    pub fn spawn_victor_86e_serial_task(&mut self) {
         if self.serial.is_none() {
             return;
         }

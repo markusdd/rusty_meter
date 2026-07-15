@@ -1,10 +1,12 @@
-//! Victor (RuoShui) 86B/C/D USB HID protocol support.
+//! Fortune Semiconductor **FS9922-DMM4** — Victor (RuoShui) legacy 86B/C/D USB HID path.
 //!
-//! These meters use a USB HID interface (VID 0x1244, PID 0xd237) with obfuscated
+//! Those meters used a USB HID interface (VID 0x1244, PID 0xd237) with obfuscated
 //! 14-byte reports from the USB cable. After deobfuscation the payload follows the
 //! Fortune Semiconductor FS9922-DMM4 chip format. Read only — modes are set on the meter.
 //!
-//! For the Victor 86E (CP2102 serial / ES51932) see `victor_es519xx` instead.
+//! **Newer** Victor meters (e.g. 86D, DM1107) do not use this path — they stream a
+//! binary serial protocol over an opto-isolated CP2102 link. See `victor_dm1107`.
+//! Victor 86E (ES51932 ASCII serial) is a separate line: `victor_es519xx`.
 //!
 //! ## Sources
 //!

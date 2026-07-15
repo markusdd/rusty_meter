@@ -76,6 +76,53 @@ impl TabViewer for PlotTabViewer<'_> {
 }
 
 impl super::MyApp {
+    /// Local CONT/DIOD threshold sliders. When `send_to_meter` is true, changes are sent via SCPI.
+    fn show_cont_diod_threshold_sliders(&mut self, ui: &mut egui::Ui, send_to_meter: bool) {
+        if self.metermode == MeterMode::Cont {
+            let threshold_slider = ui.add(
+                egui::Slider::new(&mut self.cont_threshold, 0..=1000)
+                    .text("Threshold (Ω)")
+                    .step_by(1.0)
+                    .clamping(SliderClamping::Always),
+            );
+            if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus())
+            {
+                if let Some(tx) = self.serial_tx.clone() {
+                    let cmd = format!("CONT:THREshold {}\n", self.cont_threshold);
+                    let value_debug = self.value_debug;
+                    tokio::spawn(async move {
+                        if let Err(e) = tx.send(cmd).await {
+                            if value_debug {
+                                println!("Failed to queue threshold command: {}", e);
+                            }
+                        }
+                    });
+                }
+            }
+        } else if self.metermode == MeterMode::Diod {
+            let threshold_slider = ui.add(
+                egui::Slider::new(&mut self.diod_threshold, 0.0..=3.0)
+                    .text("Threshold (V)")
+                    .step_by(0.1)
+                    .clamping(SliderClamping::Always),
+            );
+            if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus())
+            {
+                if let Some(tx) = self.serial_tx.clone() {
+                    let cmd = format!("DIOD:THREshold {}\n", self.diod_threshold);
+                    let value_debug = self.value_debug;
+                    tokio::spawn(async move {
+                        if let Err(e) = tx.send(cmd).await {
+                            if value_debug {
+                                println!("Failed to queue threshold command: {}", e);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
     /// Called by the framework to save state before shutdown.
     pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // Save recording data if recording is active
@@ -123,16 +170,49 @@ impl super::MyApp {
             self.is_init = true;
         }
 
-        // Process all available measurements
-        if let Some(ref mut rx) = self.serial_rx {
-            while let Ok(meas_opt) = rx.try_recv() {
-                if let Some(meas) = meas_opt {
-                    self.curr_meas = meas; // Update curr_meas with new data
+        // Victor 86B/C/D serial: LCD text + mode from DM1107 frames (read-only, no SCPI ranges)
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.connection_type == super::ConnectionType::Victor86bcdSerial {
+            if let Some(rx) = &mut self.victor_86bcd_rx {
+                while let Ok(update) = rx.try_recv() {
+                    self.victor_lcd_display = update.display;
+                    if let Some(v) = update.value {
+                        self.curr_meas = v;
+                    }
+                    if update.mode != self.metermode {
+                        self.metermode = update.mode;
+                        self.curr_unit = update.unit;
+                        self.values = VecDeque::with_capacity(self.mem_depth);
+                        self.hist_values = VecDeque::with_capacity(self.hist_mem_depth);
+                        self.rangecmd = None;
+                        self.curr_range = 0;
+                        if self.value_debug {
+                            println!("Updated metermode to: {:?}", update.mode);
+                        }
+                    } else if self.curr_unit != update.unit {
+                        self.curr_unit = update.unit;
+                    }
                 }
             }
         }
 
-        // Process all available mode updates
+        // SCPI / Victor 86E / HID — all use serial_rx for the live value
+        #[cfg(not(target_arch = "wasm32"))]
+        let poll_serial_rx = self.connection_type != super::ConnectionType::Victor86bcdSerial;
+        #[cfg(target_arch = "wasm32")]
+        let poll_serial_rx = true;
+
+        if poll_serial_rx {
+            if let Some(ref mut rx) = self.serial_rx {
+                while let Ok(meas_opt) = rx.try_recv() {
+                    if let Some(meas) = meas_opt {
+                        self.curr_meas = meas;
+                    }
+                }
+            }
+        }
+
+        // Process mode updates (SCPI / Victor 86E / HID)
         let read_only = self.is_read_only();
         if let Some(ref mut rx) = self.mode_rx {
             while let Ok((mode, unit)) = rx.try_recv() {
@@ -228,14 +308,17 @@ impl super::MyApp {
                         ui.label("Connection:");
                         egui::ComboBox::from_id_salt("connection_type")
                             .selected_text(match self.connection_type {
-                                super::ConnectionType::Serial => "SCPI Serial (OWON)",
+                                super::ConnectionType::ScpiSerial => "SCPI Serial (OWON)",
                                 super::ConnectionType::VictorHid => "Victor USB HID (86B/C/D)",
-                                super::ConnectionType::VictorSerial => "Victor Serial (86E)",
+                                super::ConnectionType::Victor86bcdSerial => {
+                                    "Victor Serial (86B/C/D)"
+                                }
+                                super::ConnectionType::Victor86eSerial => "Victor Serial (86E)",
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.connection_type,
-                                    super::ConnectionType::Serial,
+                                    super::ConnectionType::ScpiSerial,
                                     "SCPI Serial (OWON)",
                                 );
                                 ui.selectable_value(
@@ -245,7 +328,12 @@ impl super::MyApp {
                                 );
                                 ui.selectable_value(
                                     &mut self.connection_type,
-                                    super::ConnectionType::VictorSerial,
+                                    super::ConnectionType::Victor86bcdSerial,
+                                    "Victor Serial (86B/C/D)",
+                                );
+                                ui.selectable_value(
+                                    &mut self.connection_type,
+                                    super::ConnectionType::Victor86eSerial,
                                     "Victor Serial (86E)",
                                 );
                             });
@@ -253,7 +341,7 @@ impl super::MyApp {
 
                     match self.connection_type {
                         #[cfg(target_arch = "wasm32")]
-                        super::ConnectionType::Serial => {
+                        super::ConnectionType::ScpiSerial => {
                             ui.label("Serial port:");
                             ui.add(
                                 DropDownBox::from_iter(
@@ -268,7 +356,9 @@ impl super::MyApp {
                             );
                         }
                         #[cfg(not(target_arch = "wasm32"))]
-                        super::ConnectionType::Serial | super::ConnectionType::VictorSerial => {
+                        super::ConnectionType::ScpiSerial
+                        | super::ConnectionType::Victor86bcdSerial
+                        | super::ConnectionType::Victor86eSerial => {
                             ui.label("Serial port:");
                             ui.add(
                                 DropDownBox::from_iter(
@@ -326,7 +416,7 @@ impl super::MyApp {
                                 self.connection_error = None;
 
                                 match self.connection_type {
-                                    super::ConnectionType::Serial => {
+                                    super::ConnectionType::ScpiSerial => {
                                         match mio_serial::new(&self.serial_port, self.baud_rate)
                                             .open_native_async()
                                         {
@@ -368,27 +458,41 @@ impl super::MyApp {
                                         }
                                     }
                                     #[cfg(not(target_arch = "wasm32"))]
-                                    super::ConnectionType::VictorSerial => {
-                                        match mio_serial::new(
+                                    super::ConnectionType::Victor86bcdSerial => {
+                                        match super::open_victor_8n1_serial(
                                             &self.serial_port,
-                                            crate::victor_es519xx::VICTOR_86E_BAUD,
-                                        )
-                                        .open_native_async()
-                                        {
+                                            crate::victor_dm1107::VICTOR_86BCD_BAUD,
+                                        ) {
                                             Ok(serial) => {
                                                 self.serial = Some(serial);
-                                                if let Some(ref mut serial) = self.serial {
-                                                    let _ = serial.set_data_bits(DataBits::Seven);
-                                                    let _ = serial
-                                                        .set_stop_bits(mio_serial::StopBits::One);
-                                                    let _ =
-                                                        serial.set_parity(mio_serial::Parity::Odd);
-                                                    self.connection_state =
-                                                        super::ConnectionState::Connected;
-                                                    self.curr_meter = "Victor 86E".to_owned();
-                                                    self.rangecmd = None;
-                                                    self.spawn_victor_serial_task();
-                                                }
+                                                self.connection_state =
+                                                    super::ConnectionState::Connected;
+                                                self.curr_meter =
+                                                    "Victor 86B/C/D (DM1107)".to_owned();
+                                                self.rangecmd = None;
+                                                self.spawn_victor_86bcd_serial_task();
+                                            }
+                                            Err(e) => {
+                                                self.connection_state =
+                                                    super::ConnectionState::Disconnected;
+                                                self.connection_error =
+                                                    Some(format!("Failed to connect: {}", e));
+                                            }
+                                        }
+                                    }
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    super::ConnectionType::Victor86eSerial => {
+                                        match super::open_victor_7o1_serial(
+                                            &self.serial_port,
+                                            crate::victor_es519xx::VICTOR_86E_BAUD,
+                                        ) {
+                                            Ok(serial) => {
+                                                self.serial = Some(serial);
+                                                self.connection_state =
+                                                    super::ConnectionState::Connected;
+                                                self.curr_meter = "Victor 86E".to_owned();
+                                                self.rangecmd = None;
+                                                self.spawn_victor_86e_serial_task();
                                             }
                                             Err(e) => {
                                                 self.connection_state =
@@ -444,17 +548,35 @@ impl super::MyApp {
 
             ui.separator();
 
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.value_debug
+                && self.connection_type == super::ConnectionType::Victor86bcdSerial
+                && self.connection_state == super::ConnectionState::Connected
+            {
+                let capture_frame = egui::Frame {
+                    inner_margin: 12.0.into(),
+                    outer_margin: egui::Margin::symmetric(24, 8),
+                    corner_radius: 5.0.into(),
+                    shadow: epaint::Shadow::NONE,
+                    fill: self.box_background_color,
+                    stroke: egui::Stroke::new(1.0, egui::Color32::DARK_GRAY),
+                };
+                capture_frame.show(ui, |ui| {
+                    self.show_victor_86bcd_capture_panel(ui);
+                });
+            }
+
             ui.horizontal(|ui| {
                 // Determine if the background and shadow should be dark red based on mode and threshold
                 let is_below_threshold = match self.metermode {
-                    MeterMode::Cont => self
-                        .values
-                        .back()
-                        .is_some_and(|&val| val <= self.cont_threshold as f64),
-                    MeterMode::Diod => self
-                        .values
-                        .back()
-                        .is_some_and(|&val| val <= self.diod_threshold as f64),
+                    MeterMode::Cont => {
+                        self.curr_meas.is_finite()
+                            && self.curr_meas <= self.cont_threshold as f64
+                    }
+                    MeterMode::Diod => {
+                        self.curr_meas.is_finite()
+                            && self.curr_meas <= self.diod_threshold as f64
+                    }
                     _ => false,
                 };
                 let background_color = if is_below_threshold {
@@ -488,6 +610,35 @@ impl super::MyApp {
                         Vec2 { x: 400.0, y: 300.0 },
                         egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
                         |ui| {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let (formatted_value, display_unit) = {
+                                let lcd_override =
+                                    if self.connection_type
+                                        == super::ConnectionType::Victor86bcdSerial
+                                        && self.curr_meas
+                                            != crate::helpers::METER_OVERLOAD_VALUE
+                                        && !self.victor_lcd_display.is_empty()
+                                    {
+                                        Some((
+                                            self.victor_lcd_display.as_str(),
+                                            self.curr_unit.as_str(),
+                                        ))
+                                    } else {
+                                        None
+                                    };
+                                let auto_scale =
+                                    !self.is_read_only() && self.auto_scale_units(&self.metermode);
+                                format_measurement(
+                                    self.curr_meas,
+                                    10,
+                                    1_000_000.0,
+                                    0.000001,
+                                    &self.metermode,
+                                    auto_scale,
+                                    lcd_override,
+                                )
+                            };
+                            #[cfg(target_arch = "wasm32")]
                             let (formatted_value, display_unit) = format_measurement(
                                 self.curr_meas,
                                 10,
@@ -495,6 +646,7 @@ impl super::MyApp {
                                 0.000001,
                                 &self.metermode,
                                 self.auto_scale_units(&self.metermode),
+                                None,
                             );
                             ui.label(
                                 egui::RichText::new(formatted_value)
@@ -627,17 +779,19 @@ impl super::MyApp {
                                         None,
                                     );
                                 }
-                                let per_btn = egui::Button::new("Period")
-                                    .selected(self.metermode == MeterMode::Per)
-                                    .min_size(btn_size);
-                                if ui.add(per_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Per,
-                                        "s",
-                                        "CONF:PER\n",
-                                        Some("PER"),
-                                        None,
-                                    );
+                                if self.mode_visible_in_ui(MeterMode::Per) {
+                                    let per_btn = egui::Button::new("Period")
+                                        .selected(self.metermode == MeterMode::Per)
+                                        .min_size(btn_size);
+                                    if ui.add(per_btn).clicked() {
+                                        self.set_mode(
+                                            MeterMode::Per,
+                                            "s",
+                                            "CONF:PER\n",
+                                            Some("PER"),
+                                            None,
+                                        );
+                                    }
                                 }
                                 if self.mode_visible_in_ui(MeterMode::Duty) {
                                     let duty_btn = egui::Button::new("Duty")
@@ -706,11 +860,10 @@ impl super::MyApp {
                 options_frame.show(ui, |ui| {
                     ui.vertical(|ui| {
                         if self.is_read_only() {
-                            ui.label("Mode/range controlled on device");
-                            let mut auto_scale = self.auto_scale_units(&self.metermode);
-                            if ui.checkbox(&mut auto_scale, "Auto-scale units").changed() {
-                                self.set_auto_scale_units(self.metermode, auto_scale);
-                            }
+                            ui.label(
+                                egui::RichText::new("Range controlled on device").italics(),
+                            );
+                            self.show_cont_diod_threshold_sliders(ui, false);
                             return;
                         }
                         let ratebox = egui::ComboBox::from_label("Sampling Rate").show_index(
@@ -780,57 +933,7 @@ impl super::MyApp {
                                 }
                             }
 
-                            if self.metermode == MeterMode::Cont {
-                                let threshold_slider = ui.add(
-                                    egui::Slider::new(&mut self.cont_threshold, 0..=1000)
-                                        .text("Threshold (Ω)")
-                                        .step_by(1.0)
-                                        .clamping(SliderClamping::Always),
-                                );
-                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
-                                {
-                                    if let Some(tx) = self.serial_tx.clone() {
-                                        let cmd =
-                                            format!("CONT:THREshold {}\n", self.cont_threshold);
-                                        let value_debug = self.value_debug;
-                                        tokio::spawn(async move {
-                                            if let Err(e) = tx.send(cmd).await {
-                                                if value_debug {
-                                                    println!(
-                                                        "Failed to queue threshold command: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        });
-                                    }
-                                }
-                            } else if self.metermode == MeterMode::Diod {
-                                let threshold_slider = ui.add(
-                                    egui::Slider::new(&mut self.diod_threshold, 0.0..=3.0)
-                                        .text("Threshold (V)")
-                                        .step_by(0.1)
-                                        .clamping(SliderClamping::Always),
-                                );
-                                if threshold_slider.drag_stopped() || threshold_slider.lost_focus()
-                                {
-                                    if let Some(tx) = self.serial_tx.clone() {
-                                        let cmd =
-                                            format!("DIOD:THREshold {}\n", self.diod_threshold);
-                                        let value_debug = self.value_debug;
-                                        tokio::spawn(async move {
-                                            if let Err(e) = tx.send(cmd).await {
-                                                if value_debug {
-                                                    println!(
-                                                        "Failed to queue threshold command: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        });
-                                    }
-                                }
-                            }
+                            self.show_cont_diod_threshold_sliders(ui, true);
                         }
 
                         // scale control per mode

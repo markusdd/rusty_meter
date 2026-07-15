@@ -6,6 +6,10 @@ pub use app::MyApp;
 mod helpers;
 mod multimeter;
 #[cfg(not(target_arch = "wasm32"))]
-mod victor;
+mod victor_fs9922;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod victor_dm1107;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod victor_86bcd_capture;
 #[cfg(not(target_arch = "wasm32"))]
 mod victor_es519xx;

@@ -22,23 +22,61 @@ mod serial;
 mod settings;
 mod ui;
 #[cfg(not(target_arch = "wasm32"))]
-mod victor_serial;
+mod victor_86bcd_serial;
+#[cfg(not(target_arch = "wasm32"))]
+mod victor_86bcd_capture_ui;
+mod victor_86e_serial;
 
 /// How rusty_meter talks to the multimeter.
 ///
-/// - `Serial` — SCPI over UART (OWON XDM series, remote control)
-/// - `VictorHid` — Victor 86B/C/D via USB HID + FS9922 cable protocol (read only)
-/// - `VictorSerial` — Victor 86E via CP2102 UART + ES51932 ASCII frames (read only)
+/// - `ScpiSerial` — SCPI over UART (OWON XDM series, remote control)
+/// - `VictorHid` — **legacy** Victor 86B/C/D via USB HID + FS9922 cable (discontinued)
+/// - `Victor86bcdSerial` — **newer** Victor (e.g. 86D): DM1107, opto-isolated CP2102 serial
+/// - `Victor86eSerial` — Victor 86E via CP2102 UART + ES51932 ASCII frames (read only)
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ConnectionType {
     #[default]
-    Serial,
-    /// Victor 86B/C/D: USB HID, Fortune FS9922-DMM4. See `victor` module / sigrok wiki.
+    ScpiSerial,
+    /// Legacy Victor 86B/C/D: USB HID, Fortune FS9922-DMM4. See `victor_fs9922` / sigrok wiki.
     #[cfg(not(target_arch = "wasm32"))]
     VictorHid,
+    /// Newer Victor (e.g. 86D): DM1107, 9600 8N1 serial over opto-isolated USB. See `victor_dm1107`.
+    #[cfg(not(target_arch = "wasm32"))]
+    Victor86bcdSerial,
     /// Victor 86E: CP2102 serial 19200 7o1, Cyrustek ES51932. See `victor_es519xx` module.
     #[cfg(not(target_arch = "wasm32"))]
-    VictorSerial,
+    Victor86eSerial,
+}
+
+/// Victor 86D / DM1107: 9600 baud, 8 data bits, no parity, 1 stop (8N1).
+/// Line settings must be set on the builder before open — post-open `set_*` is unreliable.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn open_victor_8n1_serial(
+    path: &str,
+    baud: u32,
+) -> Result<SerialStream, mio_serial::Error> {
+    use mio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
+
+    mio_serial::new(path, baud)
+        .data_bits(DataBits::Eight)
+        .parity(Parity::None)
+        .stop_bits(StopBits::One)
+        .open_native_async()
+}
+
+/// Victor 86E / ES51932: 19200 baud, 7 data bits, odd parity, 1 stop (7o1).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn open_victor_7o1_serial(
+    path: &str,
+    baud: u32,
+) -> Result<SerialStream, mio_serial::Error> {
+    use mio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
+
+    mio_serial::new(path, baud)
+        .data_bits(DataBits::Seven)
+        .parity(Parity::Odd)
+        .stop_bits(StopBits::One)
+        .open_native_async()
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -183,10 +221,37 @@ pub struct MyApp {
     shutdown_tx: Option<oneshot::Sender<()>>, // Signal to shutdown serial task
     #[serde(skip)]
     mode_rx: Option<mpsc::Receiver<(MeterMode, String)>>, // Channel for mode + unit updates
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    victor_86bcd_rx: Option<mpsc::Receiver<crate::victor_dm1107::Dm1107LiveUpdate>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    victor_lcd_display: String,
     #[serde(skip)]
     value_debug_shared: Arc<Mutex<bool>>, // Shared debug flag for live updates
     #[serde(skip)]
     poll_interval_shared: Arc<Mutex<u64>>, // Shared poll interval for live updates
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    victor_86bcd_capture_function: crate::victor_86bcd_capture::Victor86bcdCaptureFunction,
+    #[cfg(not(target_arch = "wasm32"))]
+    victor_86bcd_capture_unit: crate::victor_86bcd_capture::Victor86bcdCaptureUnit,
+    #[cfg(not(target_arch = "wasm32"))]
+    victor_86bcd_capture_dp_mode: crate::victor_86bcd_capture::Victor86bcdCaptureDpMode,
+    #[cfg(not(target_arch = "wasm32"))]
+    victor_86bcd_capture_digits: [crate::victor_86bcd_capture::LcdDigit; 4],
+    #[cfg(not(target_arch = "wasm32"))]
+    victor_86bcd_capture_dp_after: Option<u8>,
+    #[cfg(not(target_arch = "wasm32"))]
+    victor_86bcd_capture_notes: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    victor_86bcd_capture_duration_ms: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    victor_86bcd_capture_tx: Option<mpsc::Sender<crate::victor_86bcd_capture::Victor86bcdCaptureJob>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    victor_86bcd_capture_status_shared: Arc<Mutex<crate::victor_86bcd_capture::Victor86bcdCaptureStatus>>,
     #[serde(skip)]
     last_graph_update: f64, // Track last graph update time
     #[serde(skip)]
@@ -274,6 +339,10 @@ impl Default for MyApp {
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal
             mode_rx: None,     // Initially no mode update channel
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_lcd_display: String::new(),
             poll_interval_ms: 20,
             graph_update_interval_ms: 20, // Default to 20ms for ~50 FPS
             graph_update_interval_max: 1000, // Default maximum of 1000ms
@@ -284,6 +353,26 @@ impl Default for MyApp {
             lock_remote: true,            // Default to locking remote mode
             value_debug_shared: Arc::new(Mutex::new(false)),
             poll_interval_shared: Arc::new(Mutex::new(20)),
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_function: crate::victor_86bcd_capture::Victor86bcdCaptureFunction::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_unit: crate::victor_86bcd_capture::Victor86bcdCaptureUnit::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_dp_mode: crate::victor_86bcd_capture::Victor86bcdCaptureDpMode::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_digits: [crate::victor_86bcd_capture::LcdDigit::Off; 4],
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_dp_after: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_notes: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_duration_ms: 1000,
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_tx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            victor_86bcd_capture_status_shared: Arc::new(Mutex::new(
+                crate::victor_86bcd_capture::Victor86bcdCaptureStatus::default(),
+            )),
             last_graph_update: 0.0,                          // Initialize to 0
             last_hist_collect_time: 0.0,                     // Initialize to 0
             connection_state: ConnectionState::Disconnected, // Initially disconnected
@@ -412,6 +501,12 @@ impl MyApp {
         self.serial_tx = None; // Drop sender to stop sending commands
         self.serial_rx = None; // Drop receiver to stop receiving measurements
         self.mode_rx = None; // Drop mode receiver
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.victor_86bcd_rx = None;
+            self.victor_lcd_display.clear();
+            self.victor_86bcd_capture_tx = None;
+        }
         self.serial = None; // Clear serial port
         self.connection_state = ConnectionState::Disconnected;
         self.connection_error = None; // Clear any previous error
@@ -442,7 +537,9 @@ impl MyApp {
         {
             matches!(
                 self.connection_type,
-                ConnectionType::VictorHid | ConnectionType::VictorSerial
+                ConnectionType::VictorHid
+                    | ConnectionType::Victor86bcdSerial
+                    | ConnectionType::Victor86eSerial
             )
         }
         #[cfg(target_arch = "wasm32")]
@@ -451,20 +548,37 @@ impl MyApp {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn is_victor_connection(&self) -> bool {
+        matches!(
+            self.connection_type,
+            ConnectionType::VictorHid
+                | ConnectionType::Victor86bcdSerial
+                | ConnectionType::Victor86eSerial
+        )
+    }
+
     /// Whether a mode button should appear in the control panel for the current connection.
     pub fn mode_visible_in_ui(&self, mode: MeterMode) -> bool {
         match mode {
             MeterMode::Duty => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    matches!(
-                        self.connection_type,
-                        ConnectionType::VictorHid | ConnectionType::VictorSerial
-                    )
+                    self.is_victor_connection()
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
                     false
+                }
+            }
+            MeterMode::Per => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.connection_type == ConnectionType::ScpiSerial
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    true
                 }
             }
             _ => true,

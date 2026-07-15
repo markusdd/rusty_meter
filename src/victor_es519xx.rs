@@ -1,6 +1,7 @@
 //! Cyrustek ES51932 (Victor / RuoShui 86E) serial protocol parser.
 //!
-//! The 86E uses a CP2102 USB-UART bridge (not USB HID like the 86B/C/D).
+//! The 86E uses a CP2102 USB-UART bridge and ES51932 ASCII frames (distinct from
+//! legacy 86B/C/D HID meters and from newer DM1107 serial meters such as the 86D).
 //! It streams read-only measurement frames; modes cannot be changed remotely.
 //!
 //! ## Serial settings
@@ -25,7 +26,7 @@
 //!   — range exponents and function-byte mapping (ES51931/ES51932, 19200/14b)
 
 use crate::multimeter::MeterMode;
-use crate::victor::VictorReading;
+use crate::victor_fs9922::VictorReading;
 
 pub const VICTOR_86E_BAUD: u32 = 19200;
 pub const PACKET_LEN: usize = 14;

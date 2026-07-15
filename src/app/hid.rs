@@ -5,7 +5,7 @@ use hidapi::HidApi;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::multimeter::MeterMode;
-use crate::victor::{self, VICTOR_PRODUCT_ID, VICTOR_VENDOR_ID};
+use crate::victor_fs9922::{self, VICTOR_PRODUCT_ID, VICTOR_VENDOR_ID};
 
 impl super::MyApp {
     pub fn refresh_hid_devices(&mut self) {
@@ -117,7 +117,9 @@ impl super::MyApp {
                         if *value_debug_shared.lock().unwrap() {
                             println!("Victor HID received {} bytes", len);
                         }
-                        if let Some(reading) = victor::parse_hid_buffer(&readbuf[..len]) {
+                        if let Some(reading) =
+                            victor_fs9922::parse_hid_buffer(&readbuf[..len])
+                        {
                             if *value_debug_shared.lock().unwrap() {
                                 println!("Victor reading: {} {:?}", reading.value, reading.mode);
                             }
