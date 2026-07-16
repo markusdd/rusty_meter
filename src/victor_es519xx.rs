@@ -25,6 +25,7 @@
 //! - [libsigrok `es519xx.c`](https://github.com/sigrokproject/libsigrok/blob/master/src/dmm/es519xx.c)
 //!   — range exponents and function-byte mapping (ES51931/ES51932, 19200/14b)
 
+use crate::helpers::METER_OVERLOAD_VALUE;
 use crate::multimeter::MeterMode;
 use crate::victor_fs9922::VictorReading;
 
@@ -167,8 +168,9 @@ fn flags_valid(flags: &Es519xxFlags) -> bool {
 }
 
 fn parse_value(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags) -> Option<f64> {
+    // Never return Infinity — graph/histogram binning panics on non-finite samples.
     if flags.is_ol || flags.is_ul {
-        return Some(f64::INFINITY);
+        return Some(METER_OVERLOAD_VALUE);
     }
 
     if !buf[1].is_ascii_digit()
@@ -191,13 +193,22 @@ fn parse_value(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags) -> Option<f64> {
 }
 
 fn apply_range(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags, value: f64) -> Option<f64> {
+    // Overload sentinel is already in display units.
+    if value == METER_OVERLOAD_VALUE {
+        return Some(value);
+    }
+
     let idx = (buf[0] as i32).saturating_sub(b'0' as i32);
     if !(0..=7).contains(&idx) {
         return None;
     }
     let idx = idx as usize;
 
-    let exponent = if flags.is_duty_cycle {
+    // Temperature: protocol digits are always °C with one fixed decimal place
+    // (libsigrok: "The digits always represent Celsius!"). Range byte is not used.
+    // Using RES exponents here made 31.6 °C display as 3.16.
+    // Duty and temperature both use a fixed one-decimal scale (not the range tables).
+    let exponent = if flags.is_duty_cycle || flags.is_temperature {
         -1
     } else if flags.is_voltage {
         EXPONENTS_VOLTAGE[idx]
@@ -217,13 +228,18 @@ fn apply_range(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags, value: f64) -> Opti
         EXPONENTS_CAP[idx]
     } else if flags.is_diode {
         EXPONENTS_DIODE[idx]
-    } else if flags.is_temperature {
-        EXPONENTS_RES[idx]
     } else {
         return None;
     };
 
-    Some(value * 10f64.powi(exponent))
+    let mut scaled = value * 10f64.powi(exponent);
+
+    // Wire value is always Celsius; convert when meter is in °F mode.
+    if flags.is_temperature && flags.is_fahrenheit {
+        scaled = scaled * 9.0 / 5.0 + 32.0;
+    }
+
+    Some(scaled)
 }
 
 fn mode_from_flags(flags: &Es519xxFlags) -> Option<(MeterMode, &'static str)> {
@@ -281,15 +297,12 @@ pub fn parse_packet(buf: &[u8; PACKET_LEN]) -> Option<VictorReading> {
     let mut value = parse_value(buf, &flags)?;
     value = apply_range(buf, &flags, value)?;
 
-    if flags.is_continuity {
-        value = if value.is_infinite() || !(0.0..=25.0).contains(&value) {
-            0.0
-        } else {
-            1.0
-        };
-    }
-
     let (mode, unit) = mode_from_flags(&flags)?;
+
+    // Contract: never emit non-finite values to the UI / graph path.
+    if !value.is_finite() {
+        value = METER_OVERLOAD_VALUE;
+    }
 
     Some(VictorReading {
         value,
@@ -316,8 +329,16 @@ pub fn feed_bytes(buffer: &mut Vec<u8>, chunk: &[u8]) -> Vec<VictorReading> {
             buffer.drain(..pos + 2);
             continue;
         }
-        let frame: [u8; PACKET_LEN] = buffer[start..=pos + 1].try_into().ok().unwrap();
-        buffer.drain(..pos + 2);
+        let end = pos + 2;
+        let Some(frame_slice) = buffer.get(start..end) else {
+            buffer.drain(..end);
+            continue;
+        };
+        let Ok(frame) = <[u8; PACKET_LEN]>::try_from(frame_slice) else {
+            buffer.drain(..end);
+            continue;
+        };
+        buffer.drain(..end);
         if let Some(reading) = parse_packet(&frame) {
             readings.push(reading);
         }
@@ -356,5 +377,64 @@ mod tests {
         let mut buf = frame("103560;000:3\r\n");
         buf[13] = b'X';
         assert!(parse_packet(&buf).is_none());
+    }
+
+    #[test]
+    fn temperature_celsius_one_decimal() {
+        // Digits 00316 + fixed exp -1 → 31.6 °C (not RES exp -2 → 3.16).
+        // Function 0x34 ('4'), status judge bit (0x08) → Celsius.
+        let mut raw = frame("0003164000:3\r\n");
+        raw[7] = 0x08;
+        let reading = parse_packet(&raw).unwrap();
+        assert!((reading.value - 31.6).abs() < 1e-6, "got {}", reading.value);
+        assert_eq!(reading.mode, MeterMode::Temp);
+        assert_eq!(reading.unit, "°C");
+    }
+
+    #[test]
+    fn temperature_fahrenheit_converts_from_celsius_digits() {
+        // Same 31.6 °C digits, judge clear → °F: 31.6 * 9/5 + 32 = 88.88.
+        let mut raw = frame("0003164000:3\r\n");
+        raw[7] = 0x00;
+        let reading = parse_packet(&raw).unwrap();
+        assert!(
+            (reading.value - 88.88).abs() < 1e-3,
+            "got {}",
+            reading.value
+        );
+        assert_eq!(reading.mode, MeterMode::Temp);
+        assert_eq!(reading.unit, "°F");
+    }
+
+    #[test]
+    fn capacitance_microfarad_range() {
+        // 4.885 µF → SI 4.885e-6 F: digits 04885, CAP '6', range '3' (exp -9).
+        let reading = parse_packet(&frame("3048856000:3\r\n")).unwrap();
+        assert!(
+            (reading.value - 4.885e-6).abs() < 1e-12,
+            "got {}",
+            reading.value
+        );
+        assert_eq!(reading.mode, MeterMode::Cap);
+        assert_eq!(reading.unit, "F");
+    }
+
+    #[test]
+    fn overload_is_finite_sentinel_not_infinity() {
+        // RES function '3', OL status bit 0 — must stay finite (histogram crash).
+        let mut raw = frame("0000003000:3\r\n");
+        raw[7] = 0x01;
+        let reading = parse_packet(&raw).unwrap();
+        assert!(reading.value.is_finite());
+        assert_eq!(reading.value, METER_OVERLOAD_VALUE);
+        assert_eq!(reading.mode, MeterMode::Res);
+    }
+
+    #[test]
+    fn feed_bytes_does_not_panic_on_short_crlf() {
+        let mut buf = Vec::new();
+        let readings = feed_bytes(&mut buf, b"\r\n103560;000:3\r\n");
+        assert_eq!(readings.len(), 1);
+        assert!((readings[0].value - 3.56).abs() < 1e-6);
     }
 }

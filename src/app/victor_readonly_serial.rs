@@ -80,6 +80,7 @@ enum Decoder {
     Es519xx {
         packet_buf: Vec<u8>,
         last_mode: Option<MeterMode>,
+        last_unit: Option<String>,
     },
     Dm1107 {
         stream: victor_dm1107::Dm1107Stream,
@@ -92,6 +93,7 @@ impl Decoder {
             VictorReadonlyProtocol::Es519xx => Self::Es519xx {
                 packet_buf: Vec::with_capacity(512),
                 last_mode: None,
+                last_unit: None,
             },
             VictorReadonlyProtocol::Dm1107 => Self::Dm1107 {
                 stream: victor_dm1107::Dm1107Stream::new(),
@@ -131,16 +133,24 @@ impl Decoder {
                 Self::Es519xx {
                     packet_buf,
                     last_mode,
+                    last_unit,
                 },
                 TaskDispatch::Es519xx { tx_value, tx_mode },
             ) => {
                 for reading in victor_es519xx::feed_bytes(packet_buf, chunk) {
                     if debug {
-                        println!("Victor 86E reading: {} {:?}", reading.value, reading.mode);
+                        println!(
+                            "Victor 86E reading: {} {:?} {}",
+                            reading.value, reading.mode, reading.unit
+                        );
                     }
                     let _ = tx_value.send(Some(reading.value)).await;
-                    if *last_mode != Some(reading.mode) {
+                    // Notify UI on mode *or* unit change (°C ↔ °F stay MeterMode::Temp).
+                    let mode_changed = *last_mode != Some(reading.mode);
+                    let unit_changed = last_unit.as_deref() != Some(reading.unit.as_str());
+                    if mode_changed || unit_changed {
                         *last_mode = Some(reading.mode);
+                        *last_unit = Some(reading.unit.clone());
                         let _ = tx_mode.send((reading.mode, reading.unit)).await;
                     }
                 }

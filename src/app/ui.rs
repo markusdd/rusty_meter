@@ -237,6 +237,9 @@ impl super::MyApp {
                     if self.value_debug {
                         println!("Updated metermode to: {:?}", mode);
                     }
+                } else if unit != self.curr_unit {
+                    // Same mode, unit only (e.g. Victor 86E °C ↔ °F)
+                    self.curr_unit = unit;
                 }
             }
         }
@@ -245,7 +248,8 @@ impl super::MyApp {
         let current_time = ui.ctx().input(|i| i.time); // Get current time in seconds
         let graph_interval = self.graph_update_interval_ms as f64 / 1000.0; // Convert ms to seconds
         if current_time - self.last_graph_update >= graph_interval {
-            if !self.curr_meas.is_nan() {
+            // Skip non-finite samples — histogram binning panics on Inf/NaN.
+            if self.curr_meas.is_finite() {
                 self.values.push_back(self.curr_meas);
                 self.update_histogram(self.curr_meas); // Update histogram with new measurement
                 while self.values.len() > self.mem_depth {
@@ -608,6 +612,7 @@ impl super::MyApp {
                         |ui| {
                             #[cfg(not(target_arch = "wasm32"))]
                             let (formatted_value, display_unit) = {
+                                // 86B/C/D only: glass text from segment decode.
                                 let lcd_override = if self.connection_type
                                     == super::ConnectionType::Victor86bcdSerial
                                     && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE
@@ -620,9 +625,16 @@ impl super::MyApp {
                                 } else {
                                     None
                                 };
-                                let auto_scale =
-                                    !self.is_read_only() && self.auto_scale_units(&self.metermode);
-                                format_measurement(
+                                // 86E: SI values like SCPI → always auto-format prefixes.
+                                // 86B/C/D: lcd_override; HID: no auto-scale (legacy).
+                                // SCPI: respect the checkbox.
+                                let auto_scale = match self.connection_type {
+                                    super::ConnectionType::Victor86eSerial => true,
+                                    super::ConnectionType::Victor86bcdSerial
+                                    | super::ConnectionType::VictorHid => false,
+                                    _ => self.auto_scale_units(&self.metermode),
+                                };
+                                let (formatted_value, mut display_unit) = format_measurement(
                                     self.curr_meas,
                                     10,
                                     1_000_000.0,
@@ -630,7 +642,12 @@ impl super::MyApp {
                                     &self.metermode,
                                     auto_scale,
                                     lcd_override,
-                                )
+                                );
+                                // ES51932 unit flags (°C / °F); formatter defaults Temp to °C.
+                                if self.metermode == MeterMode::Temp && !self.curr_unit.is_empty() {
+                                    display_unit = self.curr_unit.clone();
+                                }
+                                (formatted_value, display_unit)
                             };
                             #[cfg(target_arch = "wasm32")]
                             let (formatted_value, display_unit) = format_measurement(
