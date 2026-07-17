@@ -292,10 +292,10 @@ fn mode_and_unit(flags: &Es519xxFlags, exp: i32) -> Option<(MeterMode, &'static 
         });
     }
     if flags.is_resistance {
-        // Range exponent selects the meter’s unit ladder (e.g. manual kΩ).
+        // Range exponent → unit annunciator on the meter (for auto-scale off display).
         let unit = if exp >= 6 {
             "MOhm"
-        } else if exp >= 3 {
+        } else if exp >= 1 {
             "kOhm"
         } else if exp <= -3 {
             "mOhm"
@@ -326,7 +326,7 @@ fn mode_and_unit(flags: &Es519xxFlags, exp: i32) -> Option<(MeterMode, &'static 
     None
 }
 
-/// Scale SI `value` into the unit string produced by [`mode_and_unit`].
+/// Scale SI value into the unit string from the decoder (meter range unit).
 pub fn si_to_meter_unit(value_si: f64, unit: &str) -> f64 {
     match unit {
         "kOhm" => value_si / 1_000.0,
@@ -492,6 +492,19 @@ mod tests {
         assert_eq!(reading.mode, MeterMode::Res);
         assert_eq!(reading.unit, "kOhm");
         assert!((si_to_meter_unit(reading.value, "kOhm") - 47.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn resistance_exp1_is_kohm_for_meter_unit() {
+        // exp +1 (range index 3): SI = 47 * 10 = 470 Ω → unit kOhm → 0.47 kΩ display.
+        let reading = parse_packet(&frame("3000473000:3\r\n")).unwrap();
+        assert!(
+            (reading.value - 470.0).abs() < 1e-9,
+            "got {}",
+            reading.value
+        );
+        assert_eq!(reading.unit, "kOhm");
+        assert!((si_to_meter_unit(reading.value, "kOhm") - 0.47).abs() < 1e-9);
     }
 
     #[test]

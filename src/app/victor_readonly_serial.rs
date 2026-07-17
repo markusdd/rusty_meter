@@ -145,14 +145,15 @@ impl Decoder {
                         );
                     }
                     let _ = tx_value.send(Some(reading.value)).await;
-                    // Notify UI on mode *or* unit change (°C ↔ °F stay MeterMode::Temp).
+                    // Always push mode/unit so range-unit changes (Ω↔kΩ) update the UI.
                     let mode_changed = *last_mode != Some(reading.mode);
                     let unit_changed = last_unit.as_deref() != Some(reading.unit.as_str());
                     if mode_changed || unit_changed {
                         *last_mode = Some(reading.mode);
                         *last_unit = Some(reading.unit.clone());
-                        let _ = tx_mode.send((reading.mode, reading.unit)).await;
                     }
+                    // Send every sample: cheap, keeps curr_unit in sync with the wire range.
+                    let _ = tx_mode.send((reading.mode, reading.unit)).await;
                 }
             }
             (Self::Dm1107 { stream }, TaskDispatch::Dm1107 { tx_live }) => {

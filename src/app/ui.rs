@@ -238,7 +238,7 @@ impl super::MyApp {
                         println!("Updated metermode to: {:?}", mode);
                     }
                 } else if unit != self.curr_unit {
-                    // Same mode, unit only (e.g. Victor 86E °C ↔ °F)
+                    // Same mode, unit only (°C↔°F, or Ω↔kΩ on range change)
                     self.curr_unit = unit;
                 }
             }
@@ -626,46 +626,50 @@ impl super::MyApp {
                                     None
                                 };
                                 // 86B/C/D: lcd_override. HID: no auto-scale.
-                                // 86E / SCPI: respect auto-scale checkbox.
-                                // 86E + auto-scale off: SI → meter range unit (matches manual range).
+                                // SCPI: format_measurement(auto_scale).
+                                // 86E: ON → SI + magnitude auto; OFF → decoder unit (meter range).
                                 let auto_scale = match self.connection_type {
                                     super::ConnectionType::Victor86bcdSerial
                                     | super::ConnectionType::VictorHid => false,
                                     _ => self.auto_scale_units(&self.metermode),
                                 };
-                                let (formatted_value, mut display_unit) = if self.connection_type
-                                    == super::ConnectionType::Victor86eSerial
-                                    && !auto_scale
-                                    && !self.curr_unit.is_empty()
-                                    && self.curr_meas.is_finite()
-                                    && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE
-                                {
-                                    let scaled = crate::victor_es519xx::si_to_meter_unit(
-                                        self.curr_meas,
-                                        &self.curr_unit,
-                                    );
-                                    let (num, _) = format_measurement(
-                                        scaled,
-                                        10,
-                                        1_000_000.0,
-                                        0.000001,
-                                        &self.metermode,
-                                        false,
-                                        None,
-                                    );
-                                    (num, self.curr_unit.clone())
-                                } else {
-                                    format_measurement(
-                                        self.curr_meas,
-                                        10,
-                                        1_000_000.0,
-                                        0.000001,
-                                        &self.metermode,
-                                        auto_scale,
-                                        lcd_override,
-                                    )
+                                let (formatted_value, mut display_unit) = {
+                                    let use_meter_unit = self.connection_type
+                                        == super::ConnectionType::Victor86eSerial
+                                        && !auto_scale
+                                        && !self.curr_unit.is_empty()
+                                        && self.curr_meas.is_finite()
+                                        && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE;
+
+                                    if use_meter_unit {
+                                        // What the meter “sends” as unit for this range.
+                                        let scaled = crate::victor_es519xx::si_to_meter_unit(
+                                            self.curr_meas,
+                                            &self.curr_unit,
+                                        );
+                                        let (num, _) = format_measurement(
+                                            scaled,
+                                            10,
+                                            1_000_000.0,
+                                            0.000001,
+                                            &self.metermode,
+                                            false,
+                                            None,
+                                        );
+                                        (num, self.curr_unit.clone())
+                                    } else {
+                                        format_measurement(
+                                            self.curr_meas,
+                                            10,
+                                            1_000_000.0,
+                                            0.000001,
+                                            &self.metermode,
+                                            auto_scale,
+                                            lcd_override,
+                                        )
+                                    }
                                 };
-                                // Temp unit from decoder (°C / °F).
+                                // Temp unit from decoder (°C / °F); formatter defaults to °C.
                                 if self.metermode == MeterMode::Temp && !self.curr_unit.is_empty() {
                                     display_unit = self.curr_unit.clone();
                                 }

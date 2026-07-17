@@ -113,9 +113,18 @@ pub struct Record {
     pub value: f64,
 }
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ModeDisplaySettings {
-    pub auto_scale_units: bool, // true = use mV / mΩ / kΩ etc. (current default behavior)
+    /// Prefer mV / kΩ / µF etc. from magnitude (default on, same as SCPI).
+    pub auto_scale_units: bool,
+}
+
+impl Default for ModeDisplaySettings {
+    fn default() -> Self {
+        Self {
+            auto_scale_units: true,
+        }
+    }
 }
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
