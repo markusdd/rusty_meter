@@ -625,25 +625,47 @@ impl super::MyApp {
                                 } else {
                                     None
                                 };
-                                // 86E: SI values like SCPI → always auto-format prefixes.
-                                // 86B/C/D: lcd_override; HID: no auto-scale (legacy).
-                                // SCPI: respect the checkbox.
+                                // 86B/C/D: lcd_override. HID: no auto-scale.
+                                // 86E / SCPI: respect auto-scale checkbox.
+                                // 86E + auto-scale off: SI → meter range unit (matches manual range).
                                 let auto_scale = match self.connection_type {
-                                    super::ConnectionType::Victor86eSerial => true,
                                     super::ConnectionType::Victor86bcdSerial
                                     | super::ConnectionType::VictorHid => false,
                                     _ => self.auto_scale_units(&self.metermode),
                                 };
-                                let (formatted_value, mut display_unit) = format_measurement(
-                                    self.curr_meas,
-                                    10,
-                                    1_000_000.0,
-                                    0.000001,
-                                    &self.metermode,
-                                    auto_scale,
-                                    lcd_override,
-                                );
-                                // ES51932 unit flags (°C / °F); formatter defaults Temp to °C.
+                                let (formatted_value, mut display_unit) = if self.connection_type
+                                    == super::ConnectionType::Victor86eSerial
+                                    && !auto_scale
+                                    && !self.curr_unit.is_empty()
+                                    && self.curr_meas.is_finite()
+                                    && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE
+                                {
+                                    let scaled = crate::victor_es519xx::si_to_meter_unit(
+                                        self.curr_meas,
+                                        &self.curr_unit,
+                                    );
+                                    let (num, _) = format_measurement(
+                                        scaled,
+                                        10,
+                                        1_000_000.0,
+                                        0.000001,
+                                        &self.metermode,
+                                        false,
+                                        None,
+                                    );
+                                    (num, self.curr_unit.clone())
+                                } else {
+                                    format_measurement(
+                                        self.curr_meas,
+                                        10,
+                                        1_000_000.0,
+                                        0.000001,
+                                        &self.metermode,
+                                        auto_scale,
+                                        lcd_override,
+                                    )
+                                };
+                                // Temp unit from decoder (°C / °F).
                                 if self.metermode == MeterMode::Temp && !self.curr_unit.is_empty() {
                                     display_unit = self.curr_unit.clone();
                                 }
@@ -873,40 +895,17 @@ impl super::MyApp {
                         if self.is_read_only() {
                             ui.label(egui::RichText::new("Range controlled on device").italics());
                             self.show_cont_diod_threshold_sliders(ui, false);
-                            return;
-                        }
-                        let ratebox = egui::ComboBox::from_label("Sampling Rate").show_index(
-                            ui,
-                            &mut self.curr_rate,
-                            self.ratecmd.len(),
-                            |i| self.ratecmd.get_opt(i).0,
-                        );
-                        if ratebox.changed() {
-                            self.confstring = self
-                                .ratecmd
-                                .gen_scpi(self.ratecmd.get_opt(self.curr_rate).0);
-                            if let Some(tx) = self.serial_tx.clone() {
-                                let cmd = self.confstring.clone();
-                                tokio::spawn(async move {
-                                    if let Err(e) = tx.send(cmd).await {
-                                        println!("Failed to queue command: {}", e);
-                                    }
-                                });
-                            }
-                            if self.value_debug {
-                                println!("Selected Rate changed: {}", self.confstring);
-                            }
-                        }
-                        if let Some(rangecmd) = &self.rangecmd {
-                            let rangebox = egui::ComboBox::from_label("Range").show_index(
+                        } else {
+                            let ratebox = egui::ComboBox::from_label("Sampling Rate").show_index(
                                 ui,
-                                &mut self.curr_range,
-                                rangecmd.len(),
-                                |i| rangecmd.get_opt(i).0,
+                                &mut self.curr_rate,
+                                self.ratecmd.len(),
+                                |i| self.ratecmd.get_opt(i).0,
                             );
-                            if rangebox.changed() {
-                                self.confstring =
-                                    rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
+                            if ratebox.changed() {
+                                self.confstring = self
+                                    .ratecmd
+                                    .gen_scpi(self.ratecmd.get_opt(self.curr_rate).0);
                                 if let Some(tx) = self.serial_tx.clone() {
                                     let cmd = self.confstring.clone();
                                     tokio::spawn(async move {
@@ -916,45 +915,81 @@ impl super::MyApp {
                                     });
                                 }
                                 if self.value_debug {
-                                    println!("Selected Range changed: {}", self.confstring);
+                                    println!("Selected Rate changed: {}", self.confstring);
                                 }
                             }
-                        }
-                        // Add beeper and threshold controls for CONT and DIOD modes
-                        if self.metermode == MeterMode::Cont || self.metermode == MeterMode::Diod {
-                            let mut beeper = self.beeper_enabled;
-                            if ui.checkbox(&mut beeper, "Beeper").changed() {
-                                self.beeper_enabled = beeper;
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = if beeper {
-                                        "SYST:BEEP:STATe ON\n".to_string()
-                                    } else {
-                                        "SYST:BEEP:STATe OFF\n".to_string()
-                                    };
-                                    let value_debug = self.value_debug;
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            if value_debug {
-                                                println!("Failed to queue beeper command: {}", e);
+                            if let Some(rangecmd) = &self.rangecmd {
+                                let rangebox = egui::ComboBox::from_label("Range").show_index(
+                                    ui,
+                                    &mut self.curr_range,
+                                    rangecmd.len(),
+                                    |i| rangecmd.get_opt(i).0,
+                                );
+                                if rangebox.changed() {
+                                    self.confstring =
+                                        rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
+                                    if let Some(tx) = self.serial_tx.clone() {
+                                        let cmd = self.confstring.clone();
+                                        tokio::spawn(async move {
+                                            if let Err(e) = tx.send(cmd).await {
+                                                println!("Failed to queue command: {}", e);
                                             }
-                                        }
-                                    });
+                                        });
+                                    }
+                                    if self.value_debug {
+                                        println!("Selected Range changed: {}", self.confstring);
+                                    }
                                 }
                             }
-
-                            self.show_cont_diod_threshold_sliders(ui, true);
+                            // Beeper + thresholds for SCPI CONT/DIOD
+                            if self.metermode == MeterMode::Cont
+                                || self.metermode == MeterMode::Diod
+                            {
+                                let mut beeper = self.beeper_enabled;
+                                if ui.checkbox(&mut beeper, "Beeper").changed() {
+                                    self.beeper_enabled = beeper;
+                                    if let Some(tx) = self.serial_tx.clone() {
+                                        let cmd = if beeper {
+                                            "SYST:BEEP:STATe ON\n".to_string()
+                                        } else {
+                                            "SYST:BEEP:STATe OFF\n".to_string()
+                                        };
+                                        let value_debug = self.value_debug;
+                                        tokio::spawn(async move {
+                                            if let Err(e) = tx.send(cmd).await {
+                                                if value_debug {
+                                                    println!(
+                                                        "Failed to queue beeper command: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+                                self.show_cont_diod_threshold_sliders(ui, true);
+                            }
                         }
 
-                        // scale control per mode
-                        let mut auto_scale = self.auto_scale_units(&self.metermode);
-                        if ui
-                            .checkbox(&mut auto_scale, "Auto-scale units")
-                            .on_hover_text(
-                                "Auto scale values and show prefixed units like mV/mΩ/kΩ",
-                            )
-                            .changed()
-                        {
-                            self.set_auto_scale_units(self.metermode, auto_scale);
+                        // SI-based meters (SCPI, 86E): same auto-scale control.
+                        // LCD/HID Victors use fixed glass text / no magnitude auto-scale.
+                        let show_auto_scale = match self.connection_type {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            super::ConnectionType::Victor86bcdSerial
+                            | super::ConnectionType::VictorHid => false,
+                            _ => true,
+                        };
+                        if show_auto_scale {
+                            let mut auto_scale = self.auto_scale_units(&self.metermode);
+                            if ui
+                                .checkbox(&mut auto_scale, "Auto-scale units")
+                                .on_hover_text(
+                                    "Auto scale values and show prefixed units like mV/mΩ/kΩ",
+                                )
+                                .changed()
+                            {
+                                self.set_auto_scale_units(self.metermode, auto_scale);
+                            }
                         }
                     });
                 });

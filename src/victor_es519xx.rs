@@ -113,10 +113,12 @@ fn parse_flags(buf: &[u8; PACKET_LEN], flags: &mut Es519xxFlags) {
         0x36 => flags.is_capacitance = true,
         0x34 => {
             flags.is_temperature = true;
+            // Victor 86E (user report #16): judge set → °F, clear → °C
+            // (opposite of some ES519xx / libsigrok notes).
             if flags.is_judge {
-                flags.is_celsius = true;
-            } else {
                 flags.is_fahrenheit = true;
+            } else {
+                flags.is_celsius = true;
             }
         }
         _ => {}
@@ -192,23 +194,16 @@ fn parse_value(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags) -> Option<f64> {
     Some(intval as f64)
 }
 
-fn apply_range(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags, value: f64) -> Option<f64> {
-    // Overload sentinel is already in display units.
-    if value == METER_OVERLOAD_VALUE {
-        return Some(value);
-    }
-
+fn range_exponent(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags) -> Option<i32> {
     let idx = (buf[0] as i32).saturating_sub(b'0' as i32);
     if !(0..=7).contains(&idx) {
         return None;
     }
     let idx = idx as usize;
 
-    // Temperature: protocol digits are always °C with one fixed decimal place
-    // (libsigrok: "The digits always represent Celsius!"). Range byte is not used.
-    // Using RES exponents here made 31.6 °C display as 3.16.
-    // Duty and temperature both use a fixed one-decimal scale (not the range tables).
-    let exponent = if flags.is_duty_cycle || flags.is_temperature {
+    // Duty / temperature: fixed one-decimal scale (not range tables).
+    // Temperature digits are always °C on the wire (libsigrok).
+    Some(if flags.is_duty_cycle || flags.is_temperature {
         -1
     } else if flags.is_voltage {
         EXPONENTS_VOLTAGE[idx]
@@ -230,11 +225,18 @@ fn apply_range(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags, value: f64) -> Opti
         EXPONENTS_DIODE[idx]
     } else {
         return None;
-    };
+    })
+}
 
+fn apply_range(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags, value: f64) -> Option<f64> {
+    if value == METER_OVERLOAD_VALUE {
+        return Some(value);
+    }
+
+    let exponent = range_exponent(buf, flags)?;
     let mut scaled = value * 10f64.powi(exponent);
 
-    // Wire value is always Celsius; convert when meter is in °F mode.
+    // Wire digits are always °C; convert only when unit is Fahrenheit.
     if flags.is_temperature && flags.is_fahrenheit {
         scaled = scaled * 9.0 / 5.0 + 32.0;
     }
@@ -242,7 +244,8 @@ fn apply_range(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags, value: f64) -> Opti
     Some(scaled)
 }
 
-fn mode_from_flags(flags: &Es519xxFlags) -> Option<(MeterMode, &'static str)> {
+/// Mode + unit as on the meter for this range (not SI magnitude auto-pick).
+fn mode_and_unit(flags: &Es519xxFlags, exp: i32) -> Option<(MeterMode, &'static str)> {
     if flags.is_continuity {
         return Some((MeterMode::Cont, "Ohm"));
     }
@@ -253,22 +256,63 @@ fn mode_from_flags(flags: &Es519xxFlags) -> Option<(MeterMode, &'static str)> {
         return Some((MeterMode::Duty, "%"));
     }
     if flags.is_voltage {
-        if flags.is_ac {
-            return Some((MeterMode::Vac, "VAC"));
+        // Only the finest voltage ranges are mV (exp -4 / -5); exp -3 is still volts.
+        if exp <= -4 {
+            return Some(if flags.is_ac {
+                (MeterMode::Vac, "mVAC")
+            } else {
+                (MeterMode::Vdc, "mVDC")
+            });
         }
-        return Some((MeterMode::Vdc, "VDC"));
+        return Some(if flags.is_ac {
+            (MeterMode::Vac, "VAC")
+        } else {
+            (MeterMode::Vdc, "VDC")
+        });
     }
     if flags.is_current {
-        if flags.is_ac {
-            return Some((MeterMode::Aac, "AAC"));
+        if flags.is_micro || exp <= -6 {
+            return Some(if flags.is_ac {
+                (MeterMode::Aac, "uAAC")
+            } else {
+                (MeterMode::Adc, "uADC")
+            });
         }
-        return Some((MeterMode::Adc, "ADC"));
+        if flags.is_milli || exp <= -3 {
+            return Some(if flags.is_ac {
+                (MeterMode::Aac, "mAAC")
+            } else {
+                (MeterMode::Adc, "mADC")
+            });
+        }
+        return Some(if flags.is_ac {
+            (MeterMode::Aac, "AAC")
+        } else {
+            (MeterMode::Adc, "ADC")
+        });
     }
     if flags.is_resistance {
-        return Some((MeterMode::Res, "Ohm"));
+        // Range exponent selects the meter’s unit ladder (e.g. manual kΩ).
+        let unit = if exp >= 6 {
+            "MOhm"
+        } else if exp >= 3 {
+            "kOhm"
+        } else if exp <= -3 {
+            "mOhm"
+        } else {
+            "Ohm"
+        };
+        return Some((MeterMode::Res, unit));
     }
     if flags.is_capacitance {
-        return Some((MeterMode::Cap, "F"));
+        let unit = match exp {
+            -12 | -11 => "pF",
+            -10 => "nF",
+            -9..=-7 => "uF",
+            -6 | -5 => "mF",
+            _ => "F",
+        };
+        return Some((MeterMode::Cap, unit));
     }
     if flags.is_frequency {
         return Some((MeterMode::Freq, "Hz"));
@@ -280,6 +324,22 @@ fn mode_from_flags(flags: &Es519xxFlags) -> Option<(MeterMode, &'static str)> {
         return Some((MeterMode::Temp, "°C"));
     }
     None
+}
+
+/// Scale SI `value` into the unit string produced by [`mode_and_unit`].
+pub fn si_to_meter_unit(value_si: f64, unit: &str) -> f64 {
+    match unit {
+        "kOhm" => value_si / 1_000.0,
+        "MOhm" => value_si / 1_000_000.0,
+        "mOhm" => value_si * 1_000.0,
+        "mVDC" | "mVAC" | "mADC" | "mAAC" => value_si * 1_000.0,
+        "uADC" | "uAAC" | "µADC" | "µAAC" => value_si * 1_000_000.0,
+        "uF" | "µF" | "μF" => value_si * 1_000_000.0,
+        "nF" => value_si * 1_000_000_000.0,
+        "pF" => value_si * 1_000_000_000_000.0,
+        "mF" => value_si * 1_000.0,
+        _ => value_si,
+    }
 }
 
 /// Parse a 14-byte Victor 86E / ES51932 serial frame.
@@ -295,9 +355,10 @@ pub fn parse_packet(buf: &[u8; PACKET_LEN]) -> Option<VictorReading> {
     }
 
     let mut value = parse_value(buf, &flags)?;
+    let exp = range_exponent(buf, &flags)?;
     value = apply_range(buf, &flags, value)?;
 
-    let (mode, unit) = mode_from_flags(&flags)?;
+    let (mode, unit) = mode_and_unit(&flags, exp)?;
 
     // Contract: never emit non-finite values to the UI / graph path.
     if !value.is_finite() {
@@ -381,10 +442,9 @@ mod tests {
 
     #[test]
     fn temperature_celsius_one_decimal() {
-        // Digits 00316 + fixed exp -1 → 31.6 °C (not RES exp -2 → 3.16).
-        // Function 0x34 ('4'), status judge bit (0x08) → Celsius.
+        // Digits 00316 + exp -1 → 31.6 °C. Judge clear → °C on Victor 86E.
         let mut raw = frame("0003164000:3\r\n");
-        raw[7] = 0x08;
+        raw[7] = 0x00;
         let reading = parse_packet(&raw).unwrap();
         assert!((reading.value - 31.6).abs() < 1e-6, "got {}", reading.value);
         assert_eq!(reading.mode, MeterMode::Temp);
@@ -393,9 +453,9 @@ mod tests {
 
     #[test]
     fn temperature_fahrenheit_converts_from_celsius_digits() {
-        // Same 31.6 °C digits, judge clear → °F: 31.6 * 9/5 + 32 = 88.88.
+        // Judge set → °F on 86E; wire digits still °C → 31.6 * 9/5 + 32 = 88.88.
         let mut raw = frame("0003164000:3\r\n");
-        raw[7] = 0x00;
+        raw[7] = 0x08;
         let reading = parse_packet(&raw).unwrap();
         assert!(
             (reading.value - 88.88).abs() < 1e-3,
@@ -408,7 +468,7 @@ mod tests {
 
     #[test]
     fn capacitance_microfarad_range() {
-        // 4.885 µF → SI 4.885e-6 F: digits 04885, CAP '6', range '3' (exp -9).
+        // 4.885 µF → SI 4.885e-6 F; unit reflects meter range (uF).
         let reading = parse_packet(&frame("3048856000:3\r\n")).unwrap();
         assert!(
             (reading.value - 4.885e-6).abs() < 1e-12,
@@ -416,7 +476,18 @@ mod tests {
             reading.value
         );
         assert_eq!(reading.mode, MeterMode::Cap);
-        assert_eq!(reading.unit, "F");
+        assert_eq!(reading.unit, "uF");
+        assert!((si_to_meter_unit(reading.value, "uF") - 4.885).abs() < 1e-9);
+    }
+
+    #[test]
+    fn resistance_range_selects_kohm_unit() {
+        // RES range index 5 → exp +3; digits 00047 → 47_000 Ω SI, unit kOhm.
+        let reading = parse_packet(&frame("5000473000:3\r\n")).unwrap();
+        assert!((reading.value - 47_000.0).abs() < 1e-6, "got {}", reading.value);
+        assert_eq!(reading.mode, MeterMode::Res);
+        assert_eq!(reading.unit, "kOhm");
+        assert!((si_to_meter_unit(reading.value, "kOhm") - 47.0).abs() < 1e-9);
     }
 
     #[test]
