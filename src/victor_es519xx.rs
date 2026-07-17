@@ -484,7 +484,11 @@ mod tests {
     fn resistance_range_selects_kohm_unit() {
         // RES range index 5 → exp +3; digits 00047 → 47_000 Ω SI, unit kOhm.
         let reading = parse_packet(&frame("5000473000:3\r\n")).unwrap();
-        assert!((reading.value - 47_000.0).abs() < 1e-6, "got {}", reading.value);
+        assert!(
+            (reading.value - 47_000.0).abs() < 1e-6,
+            "got {}",
+            reading.value
+        );
         assert_eq!(reading.mode, MeterMode::Res);
         assert_eq!(reading.unit, "kOhm");
         assert!((si_to_meter_unit(reading.value, "kOhm") - 47.0).abs() < 1e-9);
