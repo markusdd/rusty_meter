@@ -1,5 +1,8 @@
 use crate::multimeter::MeterMode;
 
+/// Sentinel value for open-line / overload on SCPI and Victor DM1107 meters.
+pub const METER_OVERLOAD_VALUE: f64 = 1e9;
+
 pub fn format_measurement(
     value: f64,
     max_digits: usize,
@@ -7,19 +10,30 @@ pub fn format_measurement(
     sci_threshold_low: f64,
     meter_mode: &MeterMode,
     auto_scale_units: bool,
+    lcd_override: Option<(&str, &str)>,
 ) -> (String, String) {
     if value.is_nan() {
         return ("    NaN".to_string(), "".to_string());
     }
 
     // Check for overload/open condition (1e9) in specific modes
-    if value == 1e9
+    if value == METER_OVERLOAD_VALUE
         && matches!(
             meter_mode,
             MeterMode::Diod | MeterMode::Cont | MeterMode::Res
         )
     {
         return ("OVERLOAD".to_string(), "".to_string());
+    }
+
+    // Victor 6000-count meters: show wire-decoded LCD text (4 digits), unit from annunciator.
+    if let Some((lcd, unit)) = lcd_override {
+        if !lcd.is_empty() {
+            return (
+                format!("{:>width$}", lcd, width = max_digits),
+                unit.to_string(),
+            );
+        }
     }
 
     let abs_value = value.abs();
@@ -33,6 +47,7 @@ pub fn format_measurement(
         MeterMode::Cap => "F",
         MeterMode::Freq => "Hz",
         MeterMode::Per => "s",
+        MeterMode::Duty => "%",
         MeterMode::Diod => "V",
         MeterMode::Cont => "Ohm",
         MeterMode::Temp => "°C",

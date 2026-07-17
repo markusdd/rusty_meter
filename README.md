@@ -5,14 +5,15 @@ If you like this, a small donation is appreciated:
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R6R8DQO8C)
 
 RustyMeter is a GUI application written in Rust powered by the awesome egui framework and builds
-on the work of @TheHWCave to turn your OWON XDM multimeter into a PC-based powerhouse
+on the work of @TheHWCave to turn your OWON XDM or Victor multimeter into a PC-based powerhouse
 with neat graphing, recording, using it on stream etc.
 
 Meters which have been confirmed working already:
 
-- XDM1041
-- XDM1241
-- XDM2041 (except 4W resistance, not yet implemented)
+- Owon XDM1041
+- Owon XDM1241
+- Owon XDM2041 (except 4W resistance, not yet implemented)
+- Victor 86 series
 
 Looking for testers for the XDM3000 series!
 
@@ -20,7 +21,7 @@ Looking for testers for the XDM3000 series!
 
 ![recorder](assets/recorder.png)
 
-Eventually, as this is all SCPI based, it could also be extended to other meters that have SCPI interfaces.
+Eventually, as this is all SCPI based (except the Victor driver), it could also be extended to other meters that have SCPI interfaces.
 Maybe some stuff even works out of the box.
 
 **NOTE:** This is work and progress and I have more features for this in mind. what works right now is connecting to the multimeter, switching modes and ranges as well as sampling rates. You also get nice graphing for a configureable amount of last samples and you can record samples to CSV, XLSX and JSON.

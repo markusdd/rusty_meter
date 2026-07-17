@@ -1,8 +1,13 @@
 # CHANGELOG
 
-## 0.4.7
+## 0.5.0
 
-- WIP
+- add support for Victor (RuoShui) 86B/C/D/E handheld DMMs (read only)
+
+This release adds a whole new device class to Rusty Meter.
+These Victor DMMs can be read out, but due to their nature
+with a twist knob for the modes they can only be read out
+and not remote controlled.
 
 ## 0.4.6
 

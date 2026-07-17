@@ -25,6 +25,7 @@ pub enum MeterMode {
     Cap,
     Freq,
     Per,
+    Duty,
     Diod,
     Cont,
     Temp,

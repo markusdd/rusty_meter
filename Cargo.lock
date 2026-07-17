@@ -1978,6 +1978,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
+name = "hidapi"
+version = "2.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c78dadfc12f865bc3fcac3897e64533b930737ceb9ef245c8277de98d0b010e9"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "pkg-config",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "home"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4101,7 +4114,7 @@ checksum = "eded382c5f5f786b989652c49544c4877d9f015cc22e145a5ea8ea66c2921cd2"
 
 [[package]]
 name = "rusty_meter"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -4116,6 +4129,7 @@ dependencies = [
  "env_logger",
  "epaint",
  "glob",
+ "hidapi",
  "image",
  "indexmap",
  "log",
@@ -4127,7 +4141,6 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
- "subprocess",
  "tempfile",
  "tokio",
  "urlencoding",
@@ -4460,16 +4473,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
 dependencies = [
  "float-cmp",
-]
-
-[[package]]
-name = "subprocess"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3713691ac66e56ba6bafb8a62158859653b3127ae5cacae98d437bbb0c9ccb06"
-dependencies = [
- "libc",
- "winapi",
 ]
 
 [[package]]
