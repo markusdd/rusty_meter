@@ -2,12 +2,21 @@
 
 ## 0.5.0
 
-- add support for Victor (RuoShui) 86B/C/D/E handheld DMMs (read only)
+Add support for Victor (RuoShui) 86B/C/D/E handheld DMMs (read only)
 
 This release adds a whole new device class to Rusty Meter.
-These Victor DMMs can be read out, but due to their nature
+These Victor handheld DMMs can be read out, but due to their nature
 with a twist knob for the modes they can only be read out
 and not remote controlled.
+
+For the B/C/D meters the support is explicitly tested for the newer generation
+USB-C type meters. These use a different chip from the old USB HID ones.
+The old ones are meant to be supported as well but testers are wanted as
+I do not have a meter myself. This release closes #16.
+
+As far as I know, this is the first free program to support the new B/C/D meters
+as there was no prior art in the Internet regarding the protocol, which had to
+be reverse engineered. If this is useful to you please consider a donation.
 
 ## 0.4.6
 
