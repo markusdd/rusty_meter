@@ -1,13 +1,13 @@
 [package]
 name = "rusty_meter"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Markus Krause <Krause.Markus@gmx.com>"]
 edition = "2024"
-rust-version = "1.92"  # when updating here, also update release.yml and rust-toolchain file
+rust-version = "1.95"  # when updating here, also update release.yml and rust-toolchain file
 
 [dependencies]
-egui = "0.34.3"
-eframe = { version = "0.34.3", default-features = false, features = [
+egui = "0.36.1"
+eframe = { version = "0.36.1", default-features = false, features = [
     "accesskit",     # Make egui comptaible with screen readers. NOTE: adds a lot of dependencies.
     "default_fonts", # Embed the default egui fonts.
     "glow",          # Use the glow rendering backend. Alternative: "wgpu".
@@ -16,37 +16,38 @@ eframe = { version = "0.34.3", default-features = false, features = [
     "wayland",       # for Linux  
 ] }
 #egui-dropdown = "0.14.0"
-egui-dropdown = { git = "https://github.com/markusdd/egui-dropdown.git" }
-egui_dock = "0.19.1"
+# Fork until ItsEthra/egui-dropdown releases egui 0.36 support
+egui-dropdown = { git = "https://github.com/markusdd/egui-dropdown.git", branch = "egui-0.36" }
+egui_dock = "0.21.1"
 image = { version = "0.25.10", features = ["jpeg", "png"] }
-egui_extras = { version = "0.34.3", features = ["all_loaders"] }
-epaint = "0.34.3"
-egui_plot = "0.35.0"
+egui_extras = { version = "0.36.1", features = ["all_loaders"] }
+epaint = "0.36.1"
+egui_plot = "0.37.0"
 log = "0.4.30"
 reqwest = { version = "0.13.4", features = ["blocking"] }
 urlencoding = "2.1.3"
-serde_json = "1.0.150"
-regex = "1.12.3"
+serde_json = "1.0.151"
+regex = "1.13.1"
 indexmap = "2.14.0"
 downloader = "0.2.8"
 tempfile = "3.27.0"
-phf = { version = "0.13.1", features = ["macros"] }
-glob = "0.3.3"
+phf = { version = "0.14.0", features = ["macros"] }
+glob = "0.3.4"
 arboard = "3.6.1"
-mio-serial = "5.0.6"
-mio = "1.2.1"
-tokio = { version = "1.52.3", features = ["full"] }
-serde = { version = "1.0.219", features = ["derive"] }
+mio-serial = "5.0.7"
+mio = "1.2.2"
+tokio = { version = "1.53.1", features = ["full"] }
+serde = { version = "1.0.229", features = ["derive"] }
 csv = "1.4.0" # For CSV output
 xlsxwriter = "0.6.1" # For XLSX output
-chrono = { version = "0.4.44", features = [
+chrono = { version = "0.4.45", features = [
     "serde",
 ] } # For timestamp handling with serde
 rfd = "0.17.2" # For file dialogs
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-env_logger = "0.11.10"
+env_logger = "0.11.11"
 hidapi = "2.6.3"
 
 # web:

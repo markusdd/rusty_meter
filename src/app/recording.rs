@@ -24,7 +24,7 @@ impl super::MyApp {
                         "This example is only intended to run as an immediate viewport"
                     );
 
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.heading("Data Recording");
 

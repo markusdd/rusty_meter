@@ -8,7 +8,7 @@ use crate::helpers::{format_measurement, powered_by};
 use crate::multimeter::{GenScpi, MeterMode, RangeCmd};
 
 // Enum to represent tab types
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PlotTab {
     Graph,
     Histogram,
@@ -37,6 +37,10 @@ struct PlotTabViewer<'a> {
 
 impl TabViewer for PlotTabViewer<'_> {
     type Tab = PlotTab;
+
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(&*tab)
+    }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         match tab {
@@ -268,7 +272,7 @@ impl super::MyApp {
             self.last_graph_update = current_time;
         }
 
-        egui::Panel::top("top_panel").show_inside(ui, |ui| {
+        egui::Panel::top("top_panel").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Settings").clicked() {
@@ -284,7 +288,7 @@ impl super::MyApp {
             });
         });
 
-        egui::Panel::bottom("bottom_panel").show_inside(ui, |ui| {
+        egui::Panel::bottom("bottom_panel").show(ui, |ui| {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 powered_by(ui);
                 ui.hyperlink_to(
@@ -298,7 +302,7 @@ impl super::MyApp {
             });
         });
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             if is_web {
                 ui.heading("RustyMeter");
             }
