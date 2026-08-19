@@ -16,7 +16,12 @@ const SERIAL_TOKEN: Token = Token(0);
 /// mio is edge-triggered: a single WRITABLE after open is easy to miss once
 /// `*IDN?` has been sent and later bootstrap commands arrive with the socket
 /// still writable. Drain whenever the queue is non-empty; WouldBlock waits.
-fn drain_writes(serial: &mut SerialStream, command_queue: &mut VecDeque<String>, debug: bool) {
+fn drain_writes(
+    serial: &mut SerialStream,
+    command_queue: &mut VecDeque<String>,
+    pending: &mut VecDeque<crate::scpi_macro::QueryKind>,
+    debug: bool,
+) {
     while let Some(cmd) = command_queue.front() {
         if debug {
             println!("Sending: {:?}", cmd);
@@ -24,6 +29,9 @@ fn drain_writes(serial: &mut SerialStream, command_queue: &mut VecDeque<String>,
         match serial.write_all(cmd.as_bytes()) {
             Ok(()) => {
                 let sent = command_queue.pop_front().unwrap();
+                if let Some(kind) = crate::scpi_macro::query_kind(&sent) {
+                    pending.push_back(kind);
+                }
                 if debug {
                     println!("Command sent: {:?}", sent);
                 }
@@ -45,20 +53,14 @@ fn drain_writes(serial: &mut SerialStream, command_queue: &mut VecDeque<String>,
     }
 }
 
-fn default_unit_for_mode(mode: MeterMode) -> String {
-    match mode {
-        MeterMode::Vdc => "VDC".to_owned(),
-        MeterMode::Vac => "VAC".to_owned(),
-        MeterMode::Adc => "ADC".to_owned(),
-        MeterMode::Aac => "AAC".to_owned(),
-        MeterMode::Res => "Ohm".to_owned(),
-        MeterMode::Cap => "F".to_owned(),
-        MeterMode::Freq => "Hz".to_owned(),
-        MeterMode::Per => "s".to_owned(),
-        MeterMode::Duty => "%".to_owned(),
-        MeterMode::Diod => "V".to_owned(),
-        MeterMode::Cont => "Ohm".to_owned(),
-        MeterMode::Temp => "°C".to_owned(),
+fn discard_pending_input(serial: &mut SerialStream) {
+    let mut buf = [0u8; 1024];
+    loop {
+        match serial.read(&mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
     }
 }
 
@@ -71,10 +73,12 @@ impl super::MyApp {
         let (tx_data, rx_data) = mpsc::channel::<Option<f64>>(100); // Channel for measurements
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // Channel for commands
         let (tx_mode, rx_mode) = mpsc::channel::<(MeterMode, String)>(10);
+        let (tx_status, rx_status) = mpsc::channel::<crate::scpi_macro::MeterStatus>(16);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>(); // Shutdown signal
         self.serial_rx = Some(rx_data);
         self.serial_tx = Some(tx_cmd.clone());
         self.mode_rx = Some(rx_mode);
+        self.status_rx = Some(rx_status);
         self.shutdown_tx = Some(shutdown_tx);
 
         let mut serial = self.serial.take().unwrap();
@@ -83,9 +87,6 @@ impl super::MyApp {
         let device_shared = self.device.clone();
         let poll_ready = self.poll_ready.clone();
         let rst_on_disconnect = self.rst_on_disconnect;
-        let beeper_enabled = self.beeper_enabled;
-        let cont_threshold = self.cont_threshold;
-        let diod_threshold = self.diod_threshold;
         let curr_mode = self.metermode;
 
         tokio::spawn(async move {
@@ -94,6 +95,7 @@ impl super::MyApp {
             let mut readbuf = [0u8; 1024];
             let mut scpimode = ScpiMode::Idn;
             let mut command_queue: VecDeque<String> = VecDeque::new();
+            let mut pending_queries: VecDeque<crate::scpi_macro::QueryKind> = VecDeque::new();
             let mut shutting_down = false;
             let mut meas_count = 0; // Counter for measurement cycles
             let mut last_mode = curr_mode;
@@ -111,9 +113,13 @@ impl super::MyApp {
                 println!("Serial port registered for READABLE and WRITABLE events");
             }
 
+            // Drop leftover MEAS? replies from a previous session sitting in the UART.
+            discard_pending_input(&mut serial);
+
             // Identify first. Dialect bootstrap + user connect macros are queued
             // from the UI after the IDN reply is parsed.
             command_queue.push_back("*IDN?\n".to_string());
+            let mut idn_tries_left = 5u8;
 
             loop {
                 tokio::select! {
@@ -174,6 +180,18 @@ impl super::MyApp {
                                                     if content.ends_with("\r\n") {
                                                         let trimmed = content.trim_end();
                                                         if scpimode == ScpiMode::Idn {
+                                                            if !crate::scpi_macro::looks_like_idn(trimmed) {
+                                                                if debug {
+                                                                    println!(
+                                                                        "Ignoring non-IDN while waiting for *IDN?: {trimmed:?}"
+                                                                    );
+                                                                }
+                                                                if idn_tries_left > 0 {
+                                                                    idn_tries_left -= 1;
+                                                                    command_queue.push_back("*IDN?\n".to_string());
+                                                                }
+                                                                continue;
+                                                            }
                                                             let mut device = device_shared.lock().unwrap();
                                                             *device = trimmed.to_owned();
                                                             scpimode = ScpiMode::Meas;
@@ -205,58 +223,55 @@ impl super::MyApp {
                                                                 }
                                                             }
                                                         } else if scpimode == ScpiMode::Meas {
-                                                            // Handle quoted function responses
                                                             let unquoted = trimmed.trim_matches('"');
-                                                            if unquoted.starts_with("VOLT") || unquoted.starts_with("CURR") ||
-                                                               unquoted == "FREQ" || unquoted == "PER" ||
-                                                               unquoted == "CAP" || unquoted == "CONT" ||
-                                                               unquoted == "DIOD" || unquoted == "RES" ||
-                                                               unquoted == "TEMP"
-                                                            {
-                                                                let mode = match unquoted {
-                                                                    "VOLT" => MeterMode::Vdc,
-                                                                    "VOLT AC" => MeterMode::Vac,
-                                                                    "CURR" => MeterMode::Adc,
-                                                                    "CURR AC" => MeterMode::Aac,
-                                                                    "RES" => MeterMode::Res,
-                                                                    "CAP" => MeterMode::Cap,
-                                                                    "FREQ" => MeterMode::Freq,
-                                                                    "PER" => MeterMode::Per,
-                                                                    "TEMP" => MeterMode::Temp,
-                                                                    // Handle DIOD/CONT based on firmware version
-                                                                    "DIOD" => if swap_diod_cont { MeterMode::Cont } else { MeterMode::Diod },
-                                                                    "CONT" => if swap_diod_cont { MeterMode::Diod } else { MeterMode::Cont },
-                                                                    _ => continue,
-                                                                };
-                                                                if mode != last_mode {
-                                                                    last_mode = mode;
-                                                                    let unit = default_unit_for_mode(mode);
-                                                                    let _ = tx_mode.send((mode, unit)).await;
-                                                                    if mode == MeterMode::Cont {
-                                                                        if beeper_enabled {
-                                                                            command_queue.push_back("SYST:BEEP:STATe ON\n".to_string());
-                                                                        } else {
-                                                                            command_queue.push_back("SYST:BEEP:STATe OFF\n".to_string());
-                                                                        }
-                                                                        command_queue.push_back(format!("CONT:THREshold {}\n", cont_threshold));
-                                                                    } else if mode == MeterMode::Diod {
-                                                                        if beeper_enabled {
-                                                                            command_queue.push_back("SYST:BEEP:STATe ON\n".to_string());
-                                                                        } else {
-                                                                            command_queue.push_back("SYST:BEEP:STATe OFF\n".to_string());
-                                                                        }
-                                                                        command_queue.push_back(format!("DIOD:THREshold {}\n", diod_threshold));
+                                                            let kind = pending_queries.pop_front();
+                                                            match kind {
+                                                                Some(crate::scpi_macro::QueryKind::Rate) => {
+                                                                    let _ = tx_status.send(crate::scpi_macro::MeterStatus::Rate(unquoted.to_owned())).await;
+                                                                }
+                                                                Some(crate::scpi_macro::QueryKind::Beep) => {
+                                                                    if let Some(on) = crate::scpi_macro::parse_beep_reply(unquoted) {
+                                                                        let _ = tx_status.send(crate::scpi_macro::MeterStatus::Beep(on)).await;
                                                                     }
+                                                                }
+                                                                Some(crate::scpi_macro::QueryKind::Auto) => {
+                                                                    let auto = unquoted == "1" || unquoted.eq_ignore_ascii_case("ON");
+                                                                    let _ = tx_status.send(crate::scpi_macro::MeterStatus::AutoRange(auto)).await;
+                                                                }
+                                                                Some(crate::scpi_macro::QueryKind::Unknown) => {
                                                                     if debug {
-                                                                        println!("Sent mode update: {:?}", mode);
+                                                                        println!("Ignored reply to unknown query: {unquoted:?}");
                                                                     }
                                                                 }
-                                                            } else if let Ok(meas) = trimmed.parse::<f64>() {
-                                                                let _ = tx_data.send(Some(meas)).await;
-                                                                if debug {
-                                                                    println!("Sent measurement: {}", meas);
+                                                                Some(crate::scpi_macro::QueryKind::Func) | None
+                                                                    if MeterMode::from_func_reply(unquoted).is_some() =>
+                                                                {
+                                                                    let mut mode = MeterMode::from_func_reply(unquoted).unwrap();
+                                                                    if swap_diod_cont {
+                                                                        mode = match mode {
+                                                                            MeterMode::Diod => MeterMode::Cont,
+                                                                            MeterMode::Cont => MeterMode::Diod,
+                                                                            other => other,
+                                                                        };
+                                                                    }
+                                                                    if mode != last_mode {
+                                                                        last_mode = mode;
+                                                                        let unit = mode.default_unit().to_owned();
+                                                                        let _ = tx_mode.send((mode, unit)).await;
+                                                                        if debug {
+                                                                            println!("Sent mode update: {:?}", mode);
+                                                                        }
+                                                                    }
                                                                 }
-                                                                meas_count += 1;
+                                                                Some(crate::scpi_macro::QueryKind::Meas) | Some(crate::scpi_macro::QueryKind::Func) | None => {
+                                                                    if let Ok(meas) = trimmed.parse::<f64>() {
+                                                                        let _ = tx_data.send(Some(meas)).await;
+                                                                        if debug {
+                                                                            println!("Sent measurement: {}", meas);
+                                                                        }
+                                                                        meas_count += 1;
+                                                                    }
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -307,7 +322,7 @@ impl super::MyApp {
                             }
                         }
 
-                        drain_writes(&mut serial, &mut command_queue, debug);
+                        drain_writes(&mut serial, &mut command_queue, &mut pending_queries, debug);
 
                         tokio::time::sleep(Duration::from_millis(interval)).await;
                     } => {}
@@ -318,7 +333,7 @@ impl super::MyApp {
                     while let Ok(cmd) = rx_cmd.try_recv() {
                         command_queue.push_back(cmd);
                     }
-                    drain_writes(&mut serial, &mut command_queue, debug);
+                    drain_writes(&mut serial, &mut command_queue, &mut pending_queries, debug);
                     if debug {
                         println!("Shutdown flush done, leftover queue: {:?}", command_queue);
                     }

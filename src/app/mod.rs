@@ -16,8 +16,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::multimeter::{GenScpi, MeterMode, RangeCmd, RateCmd, ScpiMode};
 use crate::scpi_macro::{
-    BootstrapSettings, MacroTarget, ScpiMacro, bootstrap_commands, classify_idn, ensure_newline,
-    idn_model, is_recordable_scpi, parse_macro_body, range_table_meter,
+    BootstrapSettings, MacroTarget, MeterStatus, ScpiMacro, ScpiUiHint, bootstrap_commands,
+    classify_idn, ensure_newline, idn_model, is_recordable_scpi, looks_like_idn, parse_macro_body,
+    range_table_meter, ui_hint_from_command, ui_refresh_queries,
 };
 
 // Submodules for split impl blocks
@@ -251,6 +252,8 @@ pub struct MyApp {
     shutdown_tx: Option<oneshot::Sender<()>>, // Signal to shutdown serial task
     #[serde(skip)]
     mode_rx: Option<mpsc::Receiver<(MeterMode, String)>>, // Channel for mode + unit updates
+    #[serde(skip)]
+    status_rx: Option<mpsc::Receiver<MeterStatus>>,
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
     victor_86bcd_rx: Option<mpsc::Receiver<crate::victor_dm1107::Dm1107LiveUpdate>>,
@@ -378,6 +381,7 @@ impl Default for MyApp {
             serial_tx: None,
             shutdown_tx: None, // Initially no shutdown signal
             mode_rx: None,     // Initially no mode update channel
+            status_rx: None,
             #[cfg(not(target_arch = "wasm32"))]
             victor_86bcd_rx: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -509,8 +513,65 @@ impl MyApp {
         if self.value_debug && !parsed.skipped_queries.is_empty() {
             println!("SCPI macro skipped queries: {:?}", parsed.skipped_queries);
         }
-        for cmd in parsed.commands {
-            self.queue_scpi(cmd, record);
+        for cmd in &parsed.commands {
+            self.queue_scpi(cmd.clone(), record);
+        }
+        self.apply_scpi_hints(&parsed.commands);
+        self.queue_ui_refresh();
+    }
+
+    fn apply_scpi_hints(&mut self, cmds: &[String]) {
+        for cmd in cmds {
+            if let Some(hint) = ui_hint_from_command(cmd) {
+                self.apply_ui_hint(hint);
+            }
+        }
+    }
+
+    fn apply_ui_hint(&mut self, hint: ScpiUiHint) {
+        match hint {
+            ScpiUiHint::Mode { mode, range_param } => {
+                self.adopt_mode(mode, None);
+                if let Some(param) = range_param {
+                    if let Some(idx) = self
+                        .rangecmd
+                        .as_ref()
+                        .and_then(|r| r.index_of_param(&param))
+                    {
+                        self.curr_range = idx;
+                    }
+                }
+            }
+            ScpiUiHint::Rate(code) => {
+                if let Some(idx) = self.ratecmd.index_of_scpi(&code) {
+                    self.curr_rate = idx;
+                }
+            }
+            ScpiUiHint::Beep(on) => self.beeper_enabled = on,
+            ScpiUiHint::ContThreshold(v) => self.cont_threshold = v,
+            ScpiUiHint::DiodThreshold(v) => self.diod_threshold = v,
+        }
+    }
+
+    fn queue_ui_refresh(&mut self) {
+        for q in ui_refresh_queries() {
+            self.queue_scpi(q, false);
+        }
+    }
+
+    fn apply_meter_status(&mut self, status: MeterStatus) {
+        match status {
+            MeterStatus::Rate(code) => {
+                if let Some(idx) = self.ratecmd.index_of_scpi(&code) {
+                    self.curr_rate = idx;
+                }
+            }
+            MeterStatus::Beep(on) => self.beeper_enabled = on,
+            MeterStatus::AutoRange(auto) => {
+                if auto {
+                    self.curr_range = 0;
+                }
+            }
         }
     }
 
@@ -525,6 +586,9 @@ impl MyApp {
     }
 
     fn apply_connect_sequence(&mut self, idn: &str) {
+        if !looks_like_idn(idn) {
+            return;
+        }
         let family = classify_idn(idn);
         self.curr_meter = range_table_meter(idn);
         let bootstrap = bootstrap_commands(family, &self.bootstrap_settings());
@@ -541,8 +605,13 @@ impl MyApp {
             .map(|m| m.body.clone())
             .collect();
         for body in matching {
-            self.run_macro_body(&body, false);
+            let parsed = parse_macro_body(&body);
+            for cmd in &parsed.commands {
+                self.queue_scpi(cmd.clone(), false);
+            }
+            self.apply_scpi_hints(&parsed.commands);
         }
+        self.queue_ui_refresh();
         self.poll_ready.store(true, Ordering::SeqCst);
     }
 
@@ -551,20 +620,7 @@ impl MyApp {
         let conf = if let Some(rangecmd) = &self.rangecmd {
             rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0)
         } else {
-            match self.metermode {
-                MeterMode::Vdc => "CONF:VOLT:DC AUTO\n".to_owned(),
-                MeterMode::Vac => "CONF:VOLT:AC AUTO\n".to_owned(),
-                MeterMode::Adc => "CONF:CURR:DC AUTO\n".to_owned(),
-                MeterMode::Aac => "CONF:CURR:AC AUTO\n".to_owned(),
-                MeterMode::Res => "CONF:RES AUTO\n".to_owned(),
-                MeterMode::Cap => "CONF:CAP AUTO\n".to_owned(),
-                MeterMode::Freq => "CONF:FREQ\n".to_owned(),
-                MeterMode::Per => "CONF:PER\n".to_owned(),
-                MeterMode::Duty => String::new(),
-                MeterMode::Diod => "CONF:DIOD\n".to_owned(),
-                MeterMode::Cont => "CONF:CONT\n".to_owned(),
-                MeterMode::Temp => "CONF:TEMP:RTD PT100\n".to_owned(),
-            }
+            self.metermode.default_conf().to_owned()
         };
         if !conf.trim().is_empty() {
             lines.push(conf);
@@ -619,27 +675,43 @@ impl MyApp {
         }
     }
 
-    fn set_mode(
-        &mut self,
-        mode: MeterMode,
-        unit: &str,
-        cmd: &str,
-        range_type: Option<&str>,
-        beeper_enabled: Option<bool>,
-    ) {
+    fn adopt_mode(&mut self, mode: MeterMode, unit: Option<&str>) {
+        if mode == self.metermode {
+            if let Some(unit) = unit
+                && unit != self.curr_unit
+            {
+                self.curr_unit = unit.to_owned();
+            }
+            return;
+        }
         self.metermode = mode;
-        self.curr_unit = unit.to_owned();
+        self.curr_unit = unit.unwrap_or(mode.default_unit()).to_owned();
+        self.values = VecDeque::with_capacity(self.mem_depth);
+        self.hist_values = VecDeque::with_capacity(self.hist_mem_depth);
+        self.rangecmd = if self.is_read_only() {
+            None
+        } else {
+            RangeCmd::new(&self.curr_meter, mode)
+        };
+        self.curr_range = 0;
+    }
+
+    fn set_mode(&mut self, mode: MeterMode) {
+        self.adopt_mode(mode, None);
+        let cmd = mode.default_conf();
         self.confstring = cmd.to_owned();
         if !cmd.is_empty() {
             self.queue_scpi(cmd, true);
         }
-        if let Some(beep) = beeper_enabled {
-            let beeper_cmd = if beep {
-                "SYST:BEEP:STATe ON\n"
-            } else {
-                "SYST:BEEP:STATe OFF\n"
-            };
-            self.queue_scpi(beeper_cmd, true);
+        if mode.with_beeper_threshold() {
+            self.queue_scpi(
+                if self.beeper_enabled {
+                    "SYST:BEEP:STATe ON\n"
+                } else {
+                    "SYST:BEEP:STATe OFF\n"
+                },
+                true,
+            );
             let threshold_cmd = if mode == MeterMode::Cont {
                 format!("CONT:THREshold {}\n", self.cont_threshold)
             } else {
@@ -647,10 +719,6 @@ impl MyApp {
             };
             self.queue_scpi(threshold_cmd, true);
         }
-        self.values = VecDeque::with_capacity(self.mem_depth);
-        self.hist_values = VecDeque::with_capacity(self.hist_mem_depth); // Reset histogram buffer
-        self.rangecmd = range_type.and_then(|rt| RangeCmd::new(&self.curr_meter, rt));
-        self.curr_range = 0;
     }
 
     // Method to handle disconnection
@@ -661,6 +729,7 @@ impl MyApp {
         self.serial_tx = None; // Drop sender to stop sending commands
         self.serial_rx = None; // Drop receiver to stop receiving measurements
         self.mode_rx = None; // Drop mode receiver
+        self.status_rx = None;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.victor_86bcd_rx = None;

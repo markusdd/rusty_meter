@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::multimeter::MeterMode;
+
 /// SCPI dialect family inferred from `*IDN?`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScpiFamily {
@@ -221,6 +223,147 @@ pub fn is_query(cmd: &str) -> bool {
     cmd.trim().trim_end_matches(['\r', '\n']).ends_with('?')
 }
 
+/// What a query reply should be parsed as (must stay in lockstep with sends).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryKind {
+    Meas,
+    Func,
+    Rate,
+    Beep,
+    Auto,
+    Unknown,
+}
+
+/// Meter state reported back to the UI after a query.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MeterStatus {
+    Rate(String),
+    Beep(bool),
+    AutoRange(bool),
+}
+
+/// UI changes implied by a command we just sent (optimistic, before query).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScpiUiHint {
+    Mode {
+        mode: MeterMode,
+        range_param: Option<String>,
+    },
+    Rate(String),
+    Beep(bool),
+    ContThreshold(u32),
+    DiodThreshold(f32),
+}
+
+pub fn query_kind(cmd: &str) -> Option<QueryKind> {
+    let t = cmd
+        .trim()
+        .trim_end_matches(['\r', '\n'])
+        .replace(' ', "")
+        .to_ascii_uppercase();
+    if !t.ends_with('?') || t == "*IDN?" {
+        return None;
+    }
+    Some(if t == "MEAS?" || t == "MEAS1?" {
+        QueryKind::Meas
+    } else if t == "FUNC?" || t == "FUNCTION?" || t.ends_with(":FUNC?") || t.ends_with(":FUNCTION?")
+    {
+        QueryKind::Func
+    } else if t == "RATE?" {
+        QueryKind::Rate
+    } else if t == "AUTO?" {
+        QueryKind::Auto
+    } else if t.starts_with("SYST:BEEP") {
+        QueryKind::Beep
+    } else {
+        QueryKind::Unknown
+    })
+}
+
+pub fn ui_refresh_queries() -> [&'static str; 4] {
+    ["FUNC?\n", "RATE?\n", "SYST:BEEP:STATe?\n", "AUTO?\n"]
+}
+
+/// Best-effort parse of a compact-Owon set command into a UI hint.
+pub fn ui_hint_from_command(cmd: &str) -> Option<ScpiUiHint> {
+    let t = cmd.trim().trim_end_matches(['\r', '\n']).trim();
+    if t.is_empty() || is_query(t) {
+        return None;
+    }
+    let compact = t.replace(' ', "").to_ascii_uppercase();
+
+    if let Some(rest) = compact.strip_prefix("RATE") {
+        if !rest.is_empty() {
+            return Some(ScpiUiHint::Rate(rest.to_owned()));
+        }
+    }
+    if let Some(rest) = compact
+        .strip_prefix("SYST:BEEP:STATE")
+        .or_else(|| compact.strip_prefix("SYST:BEEP"))
+    {
+        return parse_beep_token(rest).map(ScpiUiHint::Beep);
+    }
+    if let Some(rest) = compact
+        .strip_prefix("CONT:THRESHOLD")
+        .or_else(|| compact.strip_prefix("CONT:THRE"))
+    {
+        return rest.parse::<u32>().ok().map(ScpiUiHint::ContThreshold);
+    }
+    if let Some(rest) = compact
+        .strip_prefix("DIOD:THRESHOLD")
+        .or_else(|| compact.strip_prefix("DIOD:THRE"))
+    {
+        return rest.parse::<f32>().ok().map(ScpiUiHint::DiodThreshold);
+    }
+
+    parse_conf_hint(&compact)
+}
+
+fn parse_beep_token(rest: &str) -> Option<bool> {
+    match rest {
+        "ON" | "1" => Some(true),
+        "OFF" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_conf_hint(compact: &str) -> Option<ScpiUiHint> {
+    let rest = compact
+        .strip_prefix("CONFIGURE:")
+        .or_else(|| compact.strip_prefix("CONF:"))?;
+    let rest = rest.strip_prefix("SCALAR:").unwrap_or(rest);
+
+    let mut best: Option<(MeterMode, usize)> = None;
+    for mode in MeterMode::ALL {
+        for prefix in mode.conf_prefixes() {
+            if rest.starts_with(prefix) && best.is_none_or(|(_, n)| prefix.len() > n) {
+                best = Some((mode, prefix.len()));
+            }
+        }
+    }
+    let (mode, n) = best?;
+    let param = rest[n..].trim_start_matches(':');
+    let range_param = if param.is_empty() {
+        None
+    } else {
+        Some(param.to_owned())
+    };
+    Some(ScpiUiHint::Mode { mode, range_param })
+}
+
+/// `*IDN?` replies contain commas / vendor text. Leftover `MEAS?` values parse as floats.
+pub fn looks_like_idn(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return false;
+    }
+    t.parse::<f64>().is_err()
+}
+
+pub fn parse_beep_reply(raw: &str) -> Option<bool> {
+    parse_beep_token(raw.trim().trim_matches('"'))
+}
+
 /// User-facing SCPI that the recorder should keep. Session/poll traffic is excluded.
 pub fn is_recordable_scpi(cmd: &str) -> bool {
     let t = cmd
@@ -255,6 +398,7 @@ fn strip_comment(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::multimeter::MeterMode;
 
     #[test]
     fn idn_model_from_standard_reply() {
@@ -386,5 +530,69 @@ CONF:VOLT:AC 500V
         assert!(!MacroTarget::IdnContains("xdm6".into()).matches(idn));
         assert!(!MacroTarget::AllScpi.matches(""));
         assert!(MacroTarget::OwonXdm6000.matches("OWON,XDM6241,s,v"));
+    }
+
+    #[test]
+    fn hints_from_issue18_and_settings() {
+        assert_eq!(
+            ui_hint_from_command("CONFigure:VOLT:DC 50"),
+            Some(ScpiUiHint::Mode {
+                mode: MeterMode::Vdc,
+                range_param: Some("50".into()),
+            })
+        );
+        assert_eq!(
+            ui_hint_from_command("CONF:VOLT:AC 500V"),
+            Some(ScpiUiHint::Mode {
+                mode: MeterMode::Vac,
+                range_param: Some("500V".into()),
+            })
+        );
+        assert_eq!(
+            ui_hint_from_command("CONF:RES 5E6"),
+            Some(ScpiUiHint::Mode {
+                mode: MeterMode::Res,
+                range_param: Some("5E6".into()),
+            })
+        );
+        assert_eq!(
+            ui_hint_from_command("RATE F"),
+            Some(ScpiUiHint::Rate("F".into()))
+        );
+        assert_eq!(
+            ui_hint_from_command("SYST:BEEP:STATe OFF"),
+            Some(ScpiUiHint::Beep(false))
+        );
+        assert_eq!(
+            ui_hint_from_command("CONT:THREshold 80"),
+            Some(ScpiUiHint::ContThreshold(80))
+        );
+        assert_eq!(
+            ui_hint_from_command("CONF:CONT"),
+            Some(ScpiUiHint::Mode {
+                mode: MeterMode::Cont,
+                range_param: None,
+            })
+        );
+    }
+
+    #[test]
+    fn looks_like_idn_rejects_meas_floats() {
+        assert!(looks_like_idn("OWON,XDM1041,abc,V4.8.0"));
+        assert!(looks_like_idn("XDM1041"));
+        assert!(!looks_like_idn("1.2345"));
+        assert!(!looks_like_idn("+3.210000E-01"));
+        assert!(!looks_like_idn(""));
+    }
+
+    #[test]
+    fn query_kind_classifies_refresh() {
+        assert_eq!(query_kind("FUNC?\n"), Some(QueryKind::Func));
+        assert_eq!(query_kind("RATE?"), Some(QueryKind::Rate));
+        assert_eq!(query_kind("SYST:BEEP:STATe?\n"), Some(QueryKind::Beep));
+        assert_eq!(query_kind("AUTO?"), Some(QueryKind::Auto));
+        assert_eq!(query_kind("MEAS?\n"), Some(QueryKind::Meas));
+        assert_eq!(query_kind("*IDN?\n"), None);
+        assert_eq!(query_kind("RATE F"), None);
     }
 }
