@@ -53,7 +53,7 @@ impl MacroTarget {
     pub fn label(&self) -> String {
         match self {
             Self::AllScpi => "All SCPI meters".to_owned(),
-            Self::OwonMeas => "Owon XDM (MEAS-era)".to_owned(),
+            Self::OwonMeas => "Owon XDM 1/2/3xxx".to_owned(),
             Self::OwonXdm6000 => "Owon XDM 6000".to_owned(),
             Self::Model(m) if m.is_empty() => "This meter".to_owned(),
             Self::Model(m) => format!("This meter ({m})"),
