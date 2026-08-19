@@ -29,8 +29,8 @@ impl super::MyApp {
                 egui::Panel::top("scpi_macro_toolbar").show(ui, |ui| {
                     ui.label(
                         "Sequences of SCPI commands. A connect macro runs after the built-in \
-                         settings bootstrap for the detected meter. Button macros appear below \
-                         the mode buttons on the main window.",
+                         settings bootstrap for the detected meter. If there are multiple they run in list order. \
+                         Button macros appear below the mode buttons on the main window.",
                     );
                     ui.separator();
                     ui.horizontal(|ui| {
