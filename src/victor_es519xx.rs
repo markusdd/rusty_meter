@@ -377,10 +377,7 @@ pub fn feed_bytes(buffer: &mut Vec<u8>, chunk: &[u8]) -> Vec<VictorReading> {
     buffer.extend_from_slice(chunk);
     let mut readings = Vec::new();
 
-    loop {
-        let Some(pos) = buffer.windows(2).position(|w| w == b"\r\n") else {
-            break;
-        };
+    while let Some(pos) = buffer.windows(2).position(|w| w == b"\r\n") {
         if pos + 2 < PACKET_LEN {
             buffer.drain(..pos + 2);
             continue;

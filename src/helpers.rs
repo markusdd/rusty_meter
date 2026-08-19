@@ -57,27 +57,23 @@ pub fn format_measurement(
     // Adjust value and unit based on mode and magnitude
     if auto_scale_units {
         match meter_mode {
-            MeterMode::Vdc | MeterMode::Vac => {
-                if abs_value < 1.0 {
-                    display_value = value * 1000.0;
-                    display_unit = if matches!(meter_mode, MeterMode::Vdc) {
-                        "mVDC"
-                    } else {
-                        "mVAC"
-                    }
-                    .to_string();
+            MeterMode::Vdc | MeterMode::Vac if abs_value < 1.0 => {
+                display_value = value * 1000.0;
+                display_unit = if matches!(meter_mode, MeterMode::Vdc) {
+                    "mVDC"
+                } else {
+                    "mVAC"
                 }
+                .to_string();
             }
-            MeterMode::Adc | MeterMode::Aac => {
-                if abs_value < 1.0 {
-                    display_value = value * 1000.0;
-                    display_unit = if matches!(meter_mode, MeterMode::Adc) {
-                        "mADC"
-                    } else {
-                        "mAAC"
-                    }
-                    .to_string();
+            MeterMode::Adc | MeterMode::Aac if abs_value < 1.0 => {
+                display_value = value * 1000.0;
+                display_unit = if matches!(meter_mode, MeterMode::Adc) {
+                    "mADC"
+                } else {
+                    "mAAC"
                 }
+                .to_string();
             }
             MeterMode::Res | MeterMode::Cont => {
                 if abs_value >= 1_000_000.0 {
@@ -103,11 +99,9 @@ pub fn format_measurement(
                     display_unit = "nF".to_string();
                 }
             }
-            MeterMode::Per => {
-                if abs_value < 1.0 {
-                    display_value = value * 1000.0;
-                    display_unit = "ms".to_string();
-                }
+            MeterMode::Per if abs_value < 1.0 => {
+                display_value = value * 1000.0;
+                display_unit = "ms".to_string();
             }
             _ => {}
         }
