@@ -2,7 +2,10 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use egui::{Color32, FontData, FontDefinitions, FontFamily};
@@ -11,12 +14,17 @@ use mio::{Events, Poll};
 use mio_serial::{SerialPortInfo, SerialStream};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::multimeter::{MeterMode, RangeCmd, RateCmd, ScpiMode};
+use crate::multimeter::{GenScpi, MeterMode, RangeCmd, RateCmd, ScpiMode};
+use crate::scpi_macro::{
+    BootstrapSettings, MacroTarget, ScpiMacro, bootstrap_commands, classify_idn, ensure_newline,
+    idn_model, is_recordable_scpi, parse_macro_body, range_table_meter,
+};
 
 // Submodules for split impl blocks
 mod graph;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
+mod macros;
 mod recording;
 mod serial;
 mod settings;
@@ -170,6 +178,8 @@ pub struct MyApp {
     recording_active: bool,        // Persistent, whether recording is active
     recording_timestamp_format: TimestampFormat, // Persistent, timestamp format
     mode_display_settings: HashMap<MeterMode, ModeDisplaySettings>,
+    #[serde(default)]
+    scpi_macros: Vec<ScpiMacro>,
     #[serde(skip)]
     recording_data: Vec<Record>, // Do not persist recording data
     #[serde(skip)]
@@ -213,6 +223,18 @@ pub struct MyApp {
     tempdir: Option<tempfile::TempDir>,
     #[serde(skip)]
     settings_open: bool,
+    #[serde(skip)]
+    macros_open: bool,
+    #[serde(skip)]
+    selected_macro_id: Option<String>,
+    #[serde(skip)]
+    macro_recording: bool,
+    #[serde(skip)]
+    macro_record_buffer: String,
+    #[serde(skip)]
+    applied_idn: Option<String>,
+    #[serde(skip)]
+    poll_ready: Arc<AtomicBool>,
     #[serde(skip)]
     is_init: bool,
     #[serde(skip)]
@@ -326,6 +348,13 @@ impl Default for MyApp {
             ports: vec![],
             tempdir: tempfile::Builder::new().prefix("rustymeter").tempdir().ok(),
             settings_open: false,
+            macros_open: false,
+            selected_macro_id: None,
+            macro_recording: false,
+            macro_record_buffer: String::new(),
+            applied_idn: None,
+            poll_ready: Arc::new(AtomicBool::new(false)),
+            scpi_macros: vec![],
             is_init: false,
             ratecmd: RateCmd::default(),
             curr_rate: 0,
@@ -428,6 +457,7 @@ impl MyApp {
             let app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
             *app.value_debug_shared.lock().unwrap() = app.value_debug;
             *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
+            app.poll_ready.store(false, Ordering::SeqCst);
             return app;
         }
 
@@ -435,6 +465,158 @@ impl MyApp {
         *app.value_debug_shared.lock().unwrap() = app.value_debug;
         *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
         app
+    }
+
+    fn queue_scpi(&mut self, cmd: impl Into<String>, record: bool) {
+        let cmd = ensure_newline(&cmd.into());
+        if cmd.trim().is_empty() {
+            return;
+        }
+        if record && self.macro_recording && is_recordable_scpi(&cmd) {
+            self.macro_record_buffer.push_str(cmd.trim_end());
+            self.macro_record_buffer.push('\n');
+        }
+        let Some(tx) = self.serial_tx.as_ref() else {
+            return;
+        };
+        let value_debug = self.value_debug;
+        match tx.try_send(cmd.clone()) {
+            Ok(()) => {
+                if value_debug {
+                    println!("Command queued: {}", cmd.trim_end());
+                }
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(pending)) => {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = tx.send(pending).await {
+                        if value_debug {
+                            println!("Failed to queue command: {}", e);
+                        }
+                    }
+                });
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                if value_debug {
+                    println!("Failed to queue command: serial task closed");
+                }
+            }
+        }
+    }
+
+    fn run_macro_body(&mut self, body: &str, record: bool) {
+        let parsed = parse_macro_body(body);
+        if self.value_debug && !parsed.skipped_queries.is_empty() {
+            println!("SCPI macro skipped queries: {:?}", parsed.skipped_queries);
+        }
+        for cmd in parsed.commands {
+            self.queue_scpi(cmd, record);
+        }
+    }
+
+    fn bootstrap_settings(&self) -> BootstrapSettings {
+        BootstrapSettings {
+            rate_opt: self.ratecmd.get_opt(self.curr_rate).1.to_owned(),
+            beeper_enabled: self.beeper_enabled,
+            cont_threshold: self.cont_threshold,
+            diod_threshold: self.diod_threshold,
+            lock_remote: self.lock_remote,
+        }
+    }
+
+    fn apply_connect_sequence(&mut self, idn: &str) {
+        let family = classify_idn(idn);
+        self.curr_meter = range_table_meter(idn);
+        let bootstrap = bootstrap_commands(family, &self.bootstrap_settings());
+        if self.value_debug {
+            println!("IDN {idn:?} -> {family:?}, bootstrap: {bootstrap:?}");
+        }
+        for cmd in bootstrap {
+            self.queue_scpi(cmd, false);
+        }
+        let matching: Vec<String> = self
+            .scpi_macros
+            .iter()
+            .filter(|m| m.run_on_connect && m.applies_to.matches(idn))
+            .map(|m| m.body.clone())
+            .collect();
+        for body in matching {
+            self.run_macro_body(&body, false);
+        }
+        self.poll_ready.store(true, Ordering::SeqCst);
+    }
+
+    fn current_setup_scpi(&self) -> String {
+        let mut lines = Vec::new();
+        let conf = if let Some(rangecmd) = &self.rangecmd {
+            rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0)
+        } else {
+            match self.metermode {
+                MeterMode::Vdc => "CONF:VOLT:DC AUTO\n".to_owned(),
+                MeterMode::Vac => "CONF:VOLT:AC AUTO\n".to_owned(),
+                MeterMode::Adc => "CONF:CURR:DC AUTO\n".to_owned(),
+                MeterMode::Aac => "CONF:CURR:AC AUTO\n".to_owned(),
+                MeterMode::Res => "CONF:RES AUTO\n".to_owned(),
+                MeterMode::Cap => "CONF:CAP AUTO\n".to_owned(),
+                MeterMode::Freq => "CONF:FREQ\n".to_owned(),
+                MeterMode::Per => "CONF:PER\n".to_owned(),
+                MeterMode::Duty => String::new(),
+                MeterMode::Diod => "CONF:DIOD\n".to_owned(),
+                MeterMode::Cont => "CONF:CONT\n".to_owned(),
+                MeterMode::Temp => "CONF:TEMP:RTD PT100\n".to_owned(),
+            }
+        };
+        if !conf.trim().is_empty() {
+            lines.push(conf);
+        }
+        lines.push(
+            self.ratecmd
+                .gen_scpi(self.ratecmd.get_opt(self.curr_rate).0),
+        );
+        if self.metermode == MeterMode::Cont || self.metermode == MeterMode::Diod {
+            lines.push(if self.beeper_enabled {
+                "SYST:BEEP:STATe ON\n".to_owned()
+            } else {
+                "SYST:BEEP:STATe OFF\n".to_owned()
+            });
+            if self.metermode == MeterMode::Cont {
+                lines.push(format!("CONT:THREshold {}\n", self.cont_threshold));
+            } else {
+                lines.push(format!("DIOD:THREshold {}\n", self.diod_threshold));
+            }
+        }
+        lines.concat()
+    }
+
+    fn finish_macro_recording(&mut self) {
+        self.macro_recording = false;
+        let body = self.macro_record_buffer.trim().to_owned();
+        self.macro_record_buffer.clear();
+        if body.is_empty() {
+            return;
+        }
+        let mut recorded = ScpiMacro::new("Recorded");
+        recorded.body = if body.ends_with('\n') {
+            body
+        } else {
+            format!("{body}\n")
+        };
+        recorded.applies_to = self.default_macro_target();
+        recorded.show_as_button = true;
+        recorded.run_on_connect = false;
+        self.selected_macro_id = Some(recorded.id.clone());
+        self.scpi_macros.push(recorded);
+        self.macros_open = true;
+    }
+
+    fn default_macro_target(&self) -> MacroTarget {
+        let idn = self.device.lock().unwrap().clone();
+        let model = idn_model(&idn);
+        if !model.is_empty() {
+            MacroTarget::Model(model)
+        } else {
+            MacroTarget::OwonMeas
+        }
     }
 
     fn set_mode(
@@ -448,57 +630,22 @@ impl MyApp {
         self.metermode = mode;
         self.curr_unit = unit.to_owned();
         self.confstring = cmd.to_owned();
-        if let Some(tx) = self.serial_tx.clone() {
-            let mode_cmd = self.confstring.clone();
-            let value_debug = self.value_debug;
-            let cont_threshold = self.cont_threshold;
-            let diod_threshold = self.diod_threshold;
-            if let Some(beep) = beeper_enabled {
-                let beeper_cmd = if beep {
-                    "SYST:BEEP:STATe ON\n".to_string()
-                } else {
-                    "SYST:BEEP:STATe OFF\n".to_string()
-                };
-                let threshold_cmd = if mode == MeterMode::Cont {
-                    format!("CONT:THREshold {}\n", cont_threshold)
-                } else {
-                    format!("DIOD:THREshold {}\n", diod_threshold)
-                };
-                tokio::spawn(async move {
-                    // Queue commands without delays
-                    if let Err(e) = tx.send(mode_cmd.clone()).await {
-                        if value_debug {
-                            println!("Failed to queue mode command: {}", e);
-                        }
-                    } else if value_debug {
-                        println!("Mode command queued: {}", mode_cmd);
-                    }
-                    if let Err(e) = tx.send(beeper_cmd.clone()).await {
-                        if value_debug {
-                            println!("Failed to queue beeper command: {}", e);
-                        }
-                    } else if value_debug {
-                        println!("Beeper command queued: {}", beeper_cmd);
-                    }
-                    if let Err(e) = tx.send(threshold_cmd.clone()).await {
-                        if value_debug {
-                            println!("Failed to queue threshold command: {}", e);
-                        }
-                    } else if value_debug {
-                        println!("Threshold command queued: {}", threshold_cmd);
-                    }
-                });
+        if !cmd.is_empty() {
+            self.queue_scpi(cmd, true);
+        }
+        if let Some(beep) = beeper_enabled {
+            let beeper_cmd = if beep {
+                "SYST:BEEP:STATe ON\n"
             } else {
-                tokio::spawn(async move {
-                    if let Err(e) = tx.send(mode_cmd.clone()).await {
-                        if value_debug {
-                            println!("Failed to queue command: {}", e);
-                        }
-                    } else if value_debug {
-                        println!("Command queued: {}", mode_cmd);
-                    }
-                });
-            }
+                "SYST:BEEP:STATe OFF\n"
+            };
+            self.queue_scpi(beeper_cmd, true);
+            let threshold_cmd = if mode == MeterMode::Cont {
+                format!("CONT:THREshold {}\n", self.cont_threshold)
+            } else {
+                format!("DIOD:THREshold {}\n", self.diod_threshold)
+            };
+            self.queue_scpi(threshold_cmd, true);
         }
         self.values = VecDeque::with_capacity(self.mem_depth);
         self.hist_values = VecDeque::with_capacity(self.hist_mem_depth); // Reset histogram buffer
@@ -525,6 +672,10 @@ impl MyApp {
         self.connection_error = None; // Clear any previous error
         let mut device = self.device.lock().unwrap();
         *device = "".to_owned(); // Clear device string
+        drop(device);
+        self.applied_idn = None;
+        self.poll_ready.store(false, Ordering::SeqCst);
+        self.macro_recording = false;
         self.curr_meas = f64::NAN; // Reset measurement
         self.values.clear(); // Clear graph data
         self.hist_values.clear(); // Clear histogram data

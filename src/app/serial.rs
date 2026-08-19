@@ -1,15 +1,49 @@
 use std::{
     collections::VecDeque,
     io::{self, Read, Write},
+    sync::atomic::Ordering,
     time::Duration,
 };
 
 use mio::{Events, Interest, Poll, Token};
+use mio_serial::SerialStream;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::multimeter::{MeterMode, RateCmd, ScpiMode};
+use crate::multimeter::{MeterMode, ScpiMode};
 
 const SERIAL_TOKEN: Token = Token(0);
+
+/// mio is edge-triggered: a single WRITABLE after open is easy to miss once
+/// `*IDN?` has been sent and later bootstrap commands arrive with the socket
+/// still writable. Drain whenever the queue is non-empty; WouldBlock waits.
+fn drain_writes(serial: &mut SerialStream, command_queue: &mut VecDeque<String>, debug: bool) {
+    while let Some(cmd) = command_queue.front() {
+        if debug {
+            println!("Sending: {:?}", cmd);
+        }
+        match serial.write_all(cmd.as_bytes()) {
+            Ok(()) => {
+                let sent = command_queue.pop_front().unwrap();
+                if debug {
+                    println!("Command sent: {:?}", sent);
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                if debug {
+                    println!("Serial write would block for {:?}, waiting", cmd);
+                }
+                break;
+            }
+            Err(e) => {
+                if debug {
+                    println!("Failed to send command {:?}: {}", cmd, e);
+                }
+                command_queue.pop_front();
+                break;
+            }
+        }
+    }
+}
 
 fn default_unit_for_mode(mode: MeterMode) -> String {
     match mode {
@@ -47,12 +81,11 @@ impl super::MyApp {
         let value_debug_shared = self.value_debug_shared.clone();
         let poll_interval_shared = self.poll_interval_shared.clone();
         let device_shared = self.device.clone();
-        let lock_remote = self.lock_remote;
+        let poll_ready = self.poll_ready.clone();
         let rst_on_disconnect = self.rst_on_disconnect;
         let beeper_enabled = self.beeper_enabled;
         let cont_threshold = self.cont_threshold;
         let diod_threshold = self.diod_threshold;
-        let curr_rate = self.curr_rate;
         let curr_mode = self.metermode;
 
         tokio::spawn(async move {
@@ -62,7 +95,6 @@ impl super::MyApp {
             let mut scpimode = ScpiMode::Idn;
             let mut command_queue: VecDeque<String> = VecDeque::new();
             let mut shutting_down = false;
-            let mut drop_serial = false; // Flag to indicate when to drop serial
             let mut meas_count = 0; // Counter for measurement cycles
             let mut last_mode = curr_mode;
             let mut swap_diod_cont = false; // Default to no swap
@@ -79,20 +111,9 @@ impl super::MyApp {
                 println!("Serial port registered for READABLE and WRITABLE events");
             }
 
-            // Initial commands
+            // Identify first. Dialect bootstrap + user connect macros are queued
+            // from the UI after the IDN reply is parsed.
             command_queue.push_back("*IDN?\n".to_string());
-            // Queue initial configuration commands
-            command_queue.push_back(format!(
-                "RATE {}\n",
-                RateCmd::default().get_opt(curr_rate).1
-            ));
-            if beeper_enabled {
-                command_queue.push_back("SYST:BEEP:STATe ON\n".to_string());
-            } else {
-                command_queue.push_back("SYST:BEEP:STATe OFF\n".to_string());
-            }
-            command_queue.push_back(format!("CONT:THREshold {}\n", cont_threshold));
-            command_queue.push_back(format!("DIOD:THREshold {}\n", diod_threshold));
 
             loop {
                 tokio::select! {
@@ -137,71 +158,6 @@ impl super::MyApp {
                                 }
 
                                 for event in events.iter() {
-                                    // Handle writes
-                                    if event.is_writable() && !command_queue.is_empty() {
-                                        if debug {
-                                            println!("Writable event detected, queue: {:?}", command_queue);
-                                        }
-                                        if let Some(cmd) = command_queue.front() {
-                                            if debug {
-                                                println!("Sending: {:?}", cmd);
-                                            }
-                                            match serial.write_all(cmd.as_bytes()) {
-                                                Ok(()) => {
-                                                    let cmd = command_queue.pop_front().unwrap();
-                                                    if debug {
-                                                        println!("Command sent: {:?}", cmd);
-                                                    }
-                                                    // Queue SYST:REM (if enabled) and MEAS? after sending *IDN?
-                                                    if cmd == "*IDN?\n" && !shutting_down {
-                                                        if lock_remote {
-                                                            command_queue.push_back("SYST:REM\n".to_string());
-                                                            if debug {
-                                                                println!("Queued SYST:REM after *IDN?");
-                                                            }
-                                                        }
-                                                        command_queue.push_back("MEAS?\n".to_string());
-                                                        if debug {
-                                                            println!(
-                                                                "Queued MEAS? after sending *IDN?, queue: {:?}",
-                                                                command_queue
-                                                            );
-                                                        }
-                                                    }
-                                                    // Set flag to drop serial after *RST or SYST:LOC is sent during shutdown
-                                                    if shutting_down {
-                                                        if (rst_on_disconnect && cmd == "*RST\n") || (!rst_on_disconnect && cmd == "SYST:LOC\n") {
-                                                            if debug {
-                                                                if rst_on_disconnect {
-                                                                    println!("*RST sent, marking serial for shutdown");
-                                                                } else {
-                                                                    println!("SYST:LOC sent, marking serial for shutdown");
-                                                                }
-                                                            }
-                                                            drop_serial = true;
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                                    if debug {
-                                                        println!(
-                                                            "Serial write would block for {:?}, waiting",
-                                                            cmd
-                                                        );
-                                                    }
-                                                    break;
-                                                }
-                                                Err(e) => {
-                                                    if debug {
-                                                        println!("Failed to send command {:?}: {}", cmd, e);
-                                                    }
-                                                    command_queue.pop_front();
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-
                                     // Handle reads
                                     if event.is_readable() {
                                         if debug {
@@ -329,8 +285,14 @@ impl super::MyApp {
                             }
                         }
 
-                        // Queue MEAS? or FUNC? for continuous polling in Meas mode if queue is empty, only if not shutting down
-                        if !shutting_down && scpimode == ScpiMode::Meas && command_queue.is_empty() {
+                        // Poll only after the UI has applied dialect bootstrap + connect macros.
+                        // MEAS-era meters use MEAS?/FUNC?; XDM6000 poll stays on this path for v1
+                        // but must not receive compact RATE/BEEP bootstrap (handled in UI).
+                        if !shutting_down
+                            && scpimode == ScpiMode::Meas
+                            && command_queue.is_empty()
+                            && poll_ready.load(Ordering::SeqCst)
+                        {
                             if meas_count >= 10 {
                                 command_queue.push_back("FUNC?\n".to_string());
                                 meas_count = 0;
@@ -345,12 +307,21 @@ impl super::MyApp {
                             }
                         }
 
+                        drain_writes(&mut serial, &mut command_queue, debug);
+
                         tokio::time::sleep(Duration::from_millis(interval)).await;
                     } => {}
                 }
 
-                // Exit the loop if we're shutting down and serial should be dropped
-                if shutting_down && drop_serial {
+                if shutting_down {
+                    let debug = *value_debug_shared.lock().unwrap();
+                    while let Ok(cmd) = rx_cmd.try_recv() {
+                        command_queue.push_back(cmd);
+                    }
+                    drain_writes(&mut serial, &mut command_queue, debug);
+                    if debug {
+                        println!("Shutdown flush done, leftover queue: {:?}", command_queue);
+                    }
                     break;
                 }
             }

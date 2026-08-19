@@ -90,17 +90,7 @@ impl super::MyApp {
                     .clamping(SliderClamping::Always),
             );
             if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus()) {
-                if let Some(tx) = self.serial_tx.clone() {
-                    let cmd = format!("CONT:THREshold {}\n", self.cont_threshold);
-                    let value_debug = self.value_debug;
-                    tokio::spawn(async move {
-                        if let Err(e) = tx.send(cmd).await {
-                            if value_debug {
-                                println!("Failed to queue threshold command: {}", e);
-                            }
-                        }
-                    });
-                }
+                self.queue_scpi(format!("CONT:THREshold {}\n", self.cont_threshold), true);
             }
         } else if self.metermode == MeterMode::Diod {
             let threshold_slider = ui.add(
@@ -110,17 +100,7 @@ impl super::MyApp {
                     .clamping(SliderClamping::Always),
             );
             if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus()) {
-                if let Some(tx) = self.serial_tx.clone() {
-                    let cmd = format!("DIOD:THREshold {}\n", self.diod_threshold);
-                    let value_debug = self.value_debug;
-                    tokio::spawn(async move {
-                        if let Err(e) = tx.send(cmd).await {
-                            if value_debug {
-                                println!("Failed to queue threshold command: {}", e);
-                            }
-                        }
-                    });
-                }
+                self.queue_scpi(format!("DIOD:THREshold {}\n", self.diod_threshold), true);
             }
         }
     }
@@ -214,6 +194,17 @@ impl super::MyApp {
             }
         }
 
+        // After *IDN? is stored on `device`, play dialect bootstrap then user connect macros.
+        if self.connection_type == super::ConnectionType::ScpiSerial
+            && self.connection_state == super::ConnectionState::Connected
+        {
+            let idn = self.device.lock().unwrap().clone();
+            if !idn.is_empty() && self.applied_idn.as_deref() != Some(idn.as_str()) {
+                self.apply_connect_sequence(&idn);
+                self.applied_idn = Some(idn);
+            }
+        }
+
         // Process mode updates (SCPI / Victor 86E / HID)
         let read_only = self.is_read_only();
         if let Some(ref mut rx) = self.mode_rx {
@@ -277,6 +268,9 @@ impl super::MyApp {
                 ui.menu_button("File", |ui| {
                     if ui.button("Settings").clicked() {
                         self.settings_open = true;
+                    }
+                    if ui.button("SCPI macros").clicked() {
+                        self.macros_open = true;
                     }
                     if !is_web && ui.button("Quit").clicked() {
                         self.disconnect(); // Use disconnect method instead of partial cleanup
@@ -914,14 +908,7 @@ impl super::MyApp {
                                 self.confstring = self
                                     .ratecmd
                                     .gen_scpi(self.ratecmd.get_opt(self.curr_rate).0);
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
+                                self.queue_scpi(self.confstring.clone(), true);
                                 if self.value_debug {
                                     println!("Selected Rate changed: {}", self.confstring);
                                 }
@@ -936,14 +923,7 @@ impl super::MyApp {
                                 if rangebox.changed() {
                                     self.confstring =
                                         rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
-                                    if let Some(tx) = self.serial_tx.clone() {
-                                        let cmd = self.confstring.clone();
-                                        tokio::spawn(async move {
-                                            if let Err(e) = tx.send(cmd).await {
-                                                println!("Failed to queue command: {}", e);
-                                            }
-                                        });
-                                    }
+                                    self.queue_scpi(self.confstring.clone(), true);
                                     if self.value_debug {
                                         println!("Selected Range changed: {}", self.confstring);
                                     }
@@ -956,24 +936,14 @@ impl super::MyApp {
                                 let mut beeper = self.beeper_enabled;
                                 if ui.checkbox(&mut beeper, "Beeper").changed() {
                                     self.beeper_enabled = beeper;
-                                    if let Some(tx) = self.serial_tx.clone() {
-                                        let cmd = if beeper {
-                                            "SYST:BEEP:STATe ON\n".to_string()
+                                    self.queue_scpi(
+                                        if beeper {
+                                            "SYST:BEEP:STATe ON\n"
                                         } else {
-                                            "SYST:BEEP:STATe OFF\n".to_string()
-                                        };
-                                        let value_debug = self.value_debug;
-                                        tokio::spawn(async move {
-                                            if let Err(e) = tx.send(cmd).await {
-                                                if value_debug {
-                                                    println!(
-                                                        "Failed to queue beeper command: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        });
-                                    }
+                                            "SYST:BEEP:STATe OFF\n"
+                                        },
+                                        true,
+                                    );
                                 }
                                 self.show_cont_diod_threshold_sliders(ui, true);
                             }
@@ -1002,6 +972,51 @@ impl super::MyApp {
                     });
                 });
             });
+
+            if self.connection_type == super::ConnectionType::ScpiSerial
+                && self.connection_state == super::ConnectionState::Connected
+                && !self.is_read_only()
+            {
+                let idn = self.device.lock().unwrap().clone();
+                if !idn.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        let rec_label = if self.macro_recording {
+                            "Stop recording"
+                        } else {
+                            "Record macro"
+                        };
+                        let rec_btn = egui::Button::new(rec_label).selected(self.macro_recording);
+                        if ui.add(rec_btn).clicked() {
+                            if self.macro_recording {
+                                self.finish_macro_recording();
+                            } else {
+                                self.macro_recording = true;
+                                self.macro_record_buffer.clear();
+                            }
+                        }
+                        if self.macro_recording {
+                            ui.colored_label(egui::Color32::RED, "REC");
+                        }
+                        let buttons: Vec<(String, String)> = self
+                            .scpi_macros
+                            .iter()
+                            .filter(|m| m.show_as_button && m.applies_to.matches(&idn))
+                            .map(|m| (m.id.clone(), m.name.clone()))
+                            .collect();
+                        for (id, name) in buttons {
+                            if ui.button(name).clicked()
+                                && let Some(body) = self
+                                    .scpi_macros
+                                    .iter()
+                                    .find(|m| m.id == id)
+                                    .map(|m| m.body.clone())
+                            {
+                                self.run_macro_body(&body, false);
+                            }
+                        }
+                    });
+                }
+            }
 
             ui.separator();
 
@@ -1036,6 +1051,7 @@ impl super::MyApp {
 
             // Show settings and recording windows
             self.show_settings(ui.ctx());
+            self.show_macros(ui.ctx());
             self.show_recording_window(ui);
 
             // ensure repaint based on update intervals
