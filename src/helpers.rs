@@ -38,21 +38,7 @@ pub fn format_measurement(
 
     let abs_value = value.abs();
     let mut display_value = value;
-    let mut display_unit = match meter_mode {
-        MeterMode::Vdc => "VDC",
-        MeterMode::Vac => "VAC",
-        MeterMode::Adc => "ADC",
-        MeterMode::Aac => "AAC",
-        MeterMode::Res => "Ohm",
-        MeterMode::Cap => "F",
-        MeterMode::Freq => "Hz",
-        MeterMode::Per => "s",
-        MeterMode::Duty => "%",
-        MeterMode::Diod => "V",
-        MeterMode::Cont => "Ohm",
-        MeterMode::Temp => "°C",
-    }
-    .to_string();
+    let mut display_unit = meter_mode.default_unit().to_string();
 
     // Adjust value and unit based on mode and magnitude
     if auto_scale_units {

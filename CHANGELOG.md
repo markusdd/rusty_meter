@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 0.6.0
+
+Major refactor of the SCPI serial system, status updates now run independent
+from scheduling MEAS commands.
+
+Also, a macro system for startup and button-selectable macros has been
+introduced. These can be created manually, cloning the current settings
+status or they can be made using a record function.
+
+The whole codebase also moved to rust 1.95, egui 0.36.1 and all dependencies
+have been moved to latest versions.
+
 ## 0.5.0
 
 Add support for Victor (RuoShui) 86B/C/D/E handheld DMMs (read only)

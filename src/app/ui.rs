@@ -1,11 +1,29 @@
-use egui::{FontFamily, FontId, SliderClamping, Vec2};
+use egui::{AtomExt, FontFamily, FontId, SliderClamping, TextWrapMode, Vec2};
 use egui_dock::{DockArea, DockState, Style, TabViewer};
 use egui_dropdown::DropDownBox;
 use mio_serial::{DataBits, SerialPort, SerialPortBuilderExt};
 use std::collections::VecDeque;
 
 use crate::helpers::{format_measurement, powered_by};
-use crate::multimeter::{GenScpi, MeterMode, RangeCmd};
+use crate::multimeter::{GenScpi, MeterMode};
+
+/// Mode-grid button size. Macro buttons use this as a minimum.
+const MODE_BUTTON_SIZE: Vec2 = Vec2 { x: 70.0, y: 20.0 };
+/// Wrap main-window macro buttons after this many mode-grid columns.
+const MACRO_GRID_COLUMNS: usize = 4;
+
+/// Outer width of two mode buttons plus the gap between them.
+fn two_mode_button_span(ui: &egui::Ui) -> f32 {
+    2.0 * MODE_BUTTON_SIZE.x + ui.spacing().item_spacing.x
+}
+
+fn macro_name_fits_one_cell(ui: &egui::Ui, name: &str) -> bool {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(name.to_owned(), font_id, ui.visuals().text_color());
+    galley.size().x + 2.0 * ui.spacing().button_padding.x <= MODE_BUTTON_SIZE.x
+}
 
 // Enum to represent tab types
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -90,17 +108,7 @@ impl super::MyApp {
                     .clamping(SliderClamping::Always),
             );
             if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus()) {
-                if let Some(tx) = self.serial_tx.clone() {
-                    let cmd = format!("CONT:THREshold {}\n", self.cont_threshold);
-                    let value_debug = self.value_debug;
-                    tokio::spawn(async move {
-                        if let Err(e) = tx.send(cmd).await {
-                            if value_debug {
-                                println!("Failed to queue threshold command: {}", e);
-                            }
-                        }
-                    });
-                }
+                self.queue_scpi(format!("CONT:THREshold {}\n", self.cont_threshold), true);
             }
         } else if self.metermode == MeterMode::Diod {
             let threshold_slider = ui.add(
@@ -110,19 +118,118 @@ impl super::MyApp {
                     .clamping(SliderClamping::Always),
             );
             if send_to_meter && (threshold_slider.drag_stopped() || threshold_slider.lost_focus()) {
-                if let Some(tx) = self.serial_tx.clone() {
-                    let cmd = format!("DIOD:THREshold {}\n", self.diod_threshold);
-                    let value_debug = self.value_debug;
-                    tokio::spawn(async move {
-                        if let Err(e) = tx.send(cmd).await {
-                            if value_debug {
-                                println!("Failed to queue threshold command: {}", e);
-                            }
-                        }
-                    });
-                }
+                self.queue_scpi(format!("DIOD:THREshold {}\n", self.diod_threshold), true);
             }
         }
+    }
+
+    fn scpi_macros_on_main(&self) -> bool {
+        self.connection_type == super::ConnectionType::ScpiSerial
+            && self.connection_state == super::ConnectionState::Connected
+            && !self.is_read_only()
+    }
+
+    fn show_record_macro_button(&mut self, ui: &mut egui::Ui) {
+        if !self.scpi_macros_on_main() {
+            return;
+        }
+        let rec_label = if self.macro_recording {
+            "Stop recording"
+        } else {
+            "Record macro"
+        };
+        let rec_btn = egui::Button::new(rec_label).selected(self.macro_recording);
+        if ui.add(rec_btn).clicked() {
+            if self.macro_recording {
+                self.finish_macro_recording();
+            } else {
+                self.macro_recording = true;
+                self.macro_record_buffer.clear();
+            }
+        }
+        if self.macro_recording {
+            ui.colored_label(egui::Color32::RED, "REC");
+        }
+    }
+
+    fn matching_button_macros(&self) -> Vec<(String, String)> {
+        let idn = self.device.lock().unwrap().clone();
+        if idn.is_empty() {
+            return Vec::new();
+        }
+        self.scpi_macros
+            .iter()
+            .filter(|m| m.show_as_button && m.applies_to.matches(&idn))
+            .map(|m| (m.id.clone(), m.name.clone()))
+            .collect()
+    }
+
+    fn show_macro_buttons(&mut self, ui: &mut egui::Ui) {
+        let buttons = self.matching_button_macros();
+        if buttons.is_empty() {
+            return;
+        }
+        // `separator` / `horizontal_wrapped` expand to available width. This
+        // box sits in a horizontal row, so that would stretch infinitely.
+        let width = ui.min_rect().width();
+        let two_cell = two_mode_button_span(ui).min(width);
+        let two_cell_text = (two_cell - 2.0 * ui.spacing().button_padding.x).max(1.0);
+        let mut rows: Vec<Vec<(String, String, bool)>> = vec![Vec::new()];
+        let mut row_cols = 0usize;
+        for (id, name) in buttons {
+            let two_wide = !macro_name_fits_one_cell(ui, &name);
+            let cols = if two_wide { 2 } else { 1 };
+            if row_cols > 0 && row_cols + cols > MACRO_GRID_COLUMNS {
+                rows.push(Vec::new());
+                row_cols = 0;
+            }
+            rows.last_mut().unwrap().push((id, name, two_wide));
+            row_cols += cols;
+        }
+        ui.scope(|ui| {
+            ui.set_width(width);
+            ui.separator();
+            for row in rows {
+                ui.horizontal(|ui| {
+                    for (id, name, two_wide) in row {
+                        let clicked = ui
+                            .scope(|ui| {
+                                let (slot_w, label, min_size) = if two_wide {
+                                    (
+                                        two_cell,
+                                        name.atom_max_width(two_cell_text)
+                                            .atom_shrink(true)
+                                            .atom_align(egui::Align2::CENTER_CENTER),
+                                        Vec2::new(two_cell, MODE_BUTTON_SIZE.y),
+                                    )
+                                } else {
+                                    (
+                                        MODE_BUTTON_SIZE.x,
+                                        name.atom_align(egui::Align2::CENTER_CENTER),
+                                        MODE_BUTTON_SIZE,
+                                    )
+                                };
+                                ui.set_min_width(slot_w);
+                                ui.set_max_width(slot_w);
+                                let btn = egui::Button::new(label)
+                                    .wrap_mode(TextWrapMode::Wrap)
+                                    .min_size(min_size);
+                                ui.add(btn).clicked()
+                            })
+                            .inner;
+                        if clicked
+                            && let Some(body) = self
+                                .scpi_macros
+                                .iter()
+                                .find(|m| m.id == id)
+                                .map(|m| m.body.clone())
+                        {
+                            self.run_macro_body(&body, false);
+                        }
+                    }
+                });
+            }
+        });
     }
 
     /// Called by the framework to save state before shutdown.
@@ -214,38 +321,44 @@ impl super::MyApp {
             }
         }
 
-        // Process mode updates (SCPI / Victor 86E / HID)
-        let read_only = self.is_read_only();
-        if let Some(ref mut rx) = self.mode_rx {
-            while let Ok((mode, unit)) = rx.try_recv() {
-                if mode != self.metermode {
-                    self.metermode = mode;
-                    self.curr_unit = unit;
-                    self.values = VecDeque::with_capacity(self.mem_depth);
-                    self.hist_values = VecDeque::with_capacity(self.hist_mem_depth); // Reset histogram buffer
-                    self.rangecmd = if read_only {
-                        None
-                    } else {
-                        match mode {
-                            MeterMode::Vdc => RangeCmd::new(&self.curr_meter, "VDC"),
-                            MeterMode::Vac => RangeCmd::new(&self.curr_meter, "VAC"),
-                            MeterMode::Adc => RangeCmd::new(&self.curr_meter, "ADC"),
-                            MeterMode::Aac => RangeCmd::new(&self.curr_meter, "AAC"),
-                            MeterMode::Res => RangeCmd::new(&self.curr_meter, "RES"),
-                            MeterMode::Cap => RangeCmd::new(&self.curr_meter, "CAP"),
-                            MeterMode::Temp => RangeCmd::new(&self.curr_meter, "TEMP"),
-                            _ => None,
-                        }
-                    };
-                    self.curr_range = 0;
-                    if self.value_debug {
-                        println!("Updated metermode to: {:?}", mode);
-                    }
-                } else if unit != self.curr_unit {
-                    // Same mode, unit only (°C↔°F, or Ω↔kΩ on range change)
-                    self.curr_unit = unit;
-                }
+        // After *IDN? is stored on `device`, play dialect bootstrap then user connect macros.
+        if self.connection_type == super::ConnectionType::ScpiSerial
+            && self.connection_state == super::ConnectionState::Connected
+        {
+            let idn = self.device.lock().unwrap().clone();
+            if !idn.is_empty()
+                && crate::scpi_macro::looks_like_idn(&idn)
+                && self.applied_idn.as_deref() != Some(idn.as_str())
+            {
+                self.apply_connect_sequence(&idn);
+                self.applied_idn = Some(idn);
             }
+        }
+
+        // Mode first: `adopt_mode` resets range to auto. The status snapshot
+        // then applies AUTO?/RANGE? from the same poll.
+        let mut mode_updates = Vec::new();
+        if let Some(ref mut rx) = self.mode_rx {
+            while let Ok(update) = rx.try_recv() {
+                mode_updates.push(update);
+            }
+        }
+        for (mode, unit) in mode_updates {
+            let changed = mode != self.metermode;
+            self.adopt_mode(mode, Some(&unit));
+            if changed && self.value_debug {
+                println!("Updated metermode to: {mode:?}");
+            }
+        }
+
+        let mut status_updates = Vec::new();
+        if let Some(ref mut rx) = self.status_rx {
+            while let Ok(status) = rx.try_recv() {
+                status_updates.push(status);
+            }
+        }
+        for status in status_updates {
+            self.apply_meter_status(status);
         }
 
         // Handle graph and histogram updates and recording based on the configured interval
@@ -277,6 +390,9 @@ impl super::MyApp {
                 ui.menu_button("File", |ui| {
                     if ui.button("Settings").clicked() {
                         self.settings_open = true;
+                    }
+                    if ui.button("SCPI macros").clicked() {
+                        self.macros_open = true;
                     }
                     if !is_web && ui.button("Quit").clicked() {
                         self.disconnect(); // Use disconnect method instead of partial cleanup
@@ -525,6 +641,7 @@ impl super::MyApp {
                     if ui.button("Start Recording").clicked() {
                         self.recording_open = true;
                     }
+                    self.show_record_macro_button(ui);
                 });
 
                 ui.horizontal(|ui| {
@@ -730,158 +847,43 @@ impl super::MyApp {
                                     .italics(),
                             );
                         }
-                        let btn_size = Vec2 { x: 70.0, y: 20.0 };
                         let read_only = self.is_read_only();
                         ui.add_enabled_ui(!read_only, |ui| {
-                            ui.horizontal(|ui| {
-                                let vdc_btn = egui::Button::new("VDC")
-                                    .selected(self.metermode == MeterMode::Vdc)
-                                    .min_size(btn_size);
-                                if ui.add(vdc_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Vdc,
-                                        "VDC",
-                                        "CONF:VOLT:DC AUTO\n",
-                                        Some("VDC"),
-                                        None,
-                                    );
-                                }
-                                let vac_btn = egui::Button::new("VAC")
-                                    .selected(self.metermode == MeterMode::Vac)
-                                    .min_size(btn_size);
-                                if ui.add(vac_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Vac,
-                                        "VAC",
-                                        "CONF:VOLT:AC AUTO\n",
-                                        Some("VAC"),
-                                        None,
-                                    );
-                                }
-                                let adc_btn = egui::Button::new("ADC")
-                                    .selected(self.metermode == MeterMode::Adc)
-                                    .min_size(btn_size);
-                                if ui.add(adc_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Adc,
-                                        "ADC",
-                                        "CONF:CURR:DC AUTO\n",
-                                        Some("ADC"),
-                                        None,
-                                    );
-                                }
-                                let aac_btn = egui::Button::new("AAC")
-                                    .selected(self.metermode == MeterMode::Aac)
-                                    .min_size(btn_size);
-                                if ui.add(aac_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Aac,
-                                        "AAC",
-                                        "CONF:CURR:AC AUTO\n",
-                                        Some("AAC"),
-                                        None,
-                                    );
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                let res_btn = egui::Button::new("Ohm")
-                                    .selected(self.metermode == MeterMode::Res)
-                                    .min_size(btn_size);
-                                if ui.add(res_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Res,
-                                        "Ohm",
-                                        "CONF:RES AUTO\n",
-                                        Some("RES"),
-                                        None,
-                                    );
-                                }
-                                let cap_btn = egui::Button::new("C")
-                                    .selected(self.metermode == MeterMode::Cap)
-                                    .min_size(btn_size);
-                                if ui.add(cap_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Cap,
-                                        "F",
-                                        "CONF:CAP AUTO\n",
-                                        Some("CAP"),
-                                        None,
-                                    );
-                                }
-                                let freq_btn = egui::Button::new("Freq")
-                                    .selected(self.metermode == MeterMode::Freq)
-                                    .min_size(btn_size);
-                                if ui.add(freq_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Freq,
-                                        "Hz",
-                                        "CONF:FREQ\n",
-                                        Some("FREQ"),
-                                        None,
-                                    );
-                                }
-                                if self.mode_visible_in_ui(MeterMode::Per) {
-                                    let per_btn = egui::Button::new("Period")
-                                        .selected(self.metermode == MeterMode::Per)
-                                        .min_size(btn_size);
-                                    if ui.add(per_btn).clicked() {
-                                        self.set_mode(
-                                            MeterMode::Per,
-                                            "s",
-                                            "CONF:PER\n",
-                                            Some("PER"),
-                                            None,
-                                        );
+                            const ROWS: [&[MeterMode]; 3] = [
+                                &[
+                                    MeterMode::Vdc,
+                                    MeterMode::Vac,
+                                    MeterMode::Adc,
+                                    MeterMode::Aac,
+                                ],
+                                &[
+                                    MeterMode::Res,
+                                    MeterMode::Cap,
+                                    MeterMode::Freq,
+                                    MeterMode::Per,
+                                    MeterMode::Duty,
+                                ],
+                                &[MeterMode::Diod, MeterMode::Cont, MeterMode::Temp],
+                            ];
+                            for row in ROWS {
+                                ui.horizontal(|ui| {
+                                    for &mode in row {
+                                        if !self.mode_visible_in_ui(mode) {
+                                            continue;
+                                        }
+                                        let btn = egui::Button::new(mode.button_label())
+                                            .selected(self.metermode == mode)
+                                            .min_size(MODE_BUTTON_SIZE);
+                                        if ui.add(btn).clicked() {
+                                            self.set_mode(mode);
+                                        }
                                     }
-                                }
-                                if self.mode_visible_in_ui(MeterMode::Duty) {
-                                    let duty_btn = egui::Button::new("Duty")
-                                        .selected(self.metermode == MeterMode::Duty)
-                                        .min_size(btn_size);
-                                    if ui.add(duty_btn).clicked() {
-                                        self.set_mode(MeterMode::Duty, "%", "", None, None);
-                                    }
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                let diod_btn = egui::Button::new("Diode")
-                                    .selected(self.metermode == MeterMode::Diod)
-                                    .min_size(btn_size);
-                                if ui.add(diod_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Diod,
-                                        "V",
-                                        "CONF:DIOD\n",
-                                        Some("DIOD"),
-                                        Some(self.beeper_enabled),
-                                    );
-                                }
-                                let cont_btn = egui::Button::new("Cont")
-                                    .selected(self.metermode == MeterMode::Cont)
-                                    .min_size(btn_size);
-                                if ui.add(cont_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Cont,
-                                        "Ohm",
-                                        "CONF:CONT\n",
-                                        Some("CONT"),
-                                        Some(self.beeper_enabled),
-                                    );
-                                }
-                                let temp_btn = egui::Button::new("Temp")
-                                    .selected(self.metermode == MeterMode::Temp)
-                                    .min_size(btn_size);
-                                if ui.add(temp_btn).clicked() {
-                                    self.set_mode(
-                                        MeterMode::Temp,
-                                        "°C",
-                                        "CONF:TEMP:RTD PT100\n",
-                                        Some("TEMP"),
-                                        None,
-                                    );
-                                }
-                            });
+                                });
+                            }
                         }); // add_enabled_ui
+                        if self.scpi_macros_on_main() {
+                            self.show_macro_buttons(ui);
+                        }
                     });
                 });
 
@@ -914,14 +916,7 @@ impl super::MyApp {
                                 self.confstring = self
                                     .ratecmd
                                     .gen_scpi(self.ratecmd.get_opt(self.curr_rate).0);
-                                if let Some(tx) = self.serial_tx.clone() {
-                                    let cmd = self.confstring.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tx.send(cmd).await {
-                                            println!("Failed to queue command: {}", e);
-                                        }
-                                    });
-                                }
+                                self.queue_scpi(self.confstring.clone(), true);
                                 if self.value_debug {
                                     println!("Selected Rate changed: {}", self.confstring);
                                 }
@@ -934,16 +929,10 @@ impl super::MyApp {
                                     |i| rangecmd.get_opt(i).0,
                                 );
                                 if rangebox.changed() {
+                                    self.meter_auto_range = self.curr_range == 0;
                                     self.confstring =
                                         rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
-                                    if let Some(tx) = self.serial_tx.clone() {
-                                        let cmd = self.confstring.clone();
-                                        tokio::spawn(async move {
-                                            if let Err(e) = tx.send(cmd).await {
-                                                println!("Failed to queue command: {}", e);
-                                            }
-                                        });
-                                    }
+                                    self.queue_scpi(self.confstring.clone(), true);
                                     if self.value_debug {
                                         println!("Selected Range changed: {}", self.confstring);
                                     }
@@ -956,24 +945,14 @@ impl super::MyApp {
                                 let mut beeper = self.beeper_enabled;
                                 if ui.checkbox(&mut beeper, "Beeper").changed() {
                                     self.beeper_enabled = beeper;
-                                    if let Some(tx) = self.serial_tx.clone() {
-                                        let cmd = if beeper {
-                                            "SYST:BEEP:STATe ON\n".to_string()
+                                    self.queue_scpi(
+                                        if beeper {
+                                            "SYST:BEEP:STATe ON\n"
                                         } else {
-                                            "SYST:BEEP:STATe OFF\n".to_string()
-                                        };
-                                        let value_debug = self.value_debug;
-                                        tokio::spawn(async move {
-                                            if let Err(e) = tx.send(cmd).await {
-                                                if value_debug {
-                                                    println!(
-                                                        "Failed to queue beeper command: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        });
-                                    }
+                                            "SYST:BEEP:STATe OFF\n"
+                                        },
+                                        true,
+                                    );
                                 }
                                 self.show_cont_diod_threshold_sliders(ui, true);
                             }
@@ -1036,6 +1015,7 @@ impl super::MyApp {
 
             // Show settings and recording windows
             self.show_settings(ui.ctx());
+            self.show_macros(ui.ctx());
             self.show_recording_window(ui);
 
             // ensure repaint based on update intervals
