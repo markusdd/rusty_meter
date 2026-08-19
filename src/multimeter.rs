@@ -103,6 +103,14 @@ impl MeterMode {
         matches!(self, Self::Cont | Self::Diod)
     }
 
+    /// Compact Owon has no `RANGE?` reply in CONT/DIOD/FREQ/PER.
+    pub fn has_manual_range(self) -> bool {
+        matches!(
+            self,
+            Self::Vdc | Self::Vac | Self::Adc | Self::Aac | Self::Res | Self::Cap | Self::Temp
+        )
+    }
+
     /// `FUNC?` tokens from MEAS-era Owons. DIOD/CONT swap is applied by the caller.
     pub fn from_func_reply(s: &str) -> Option<Self> {
         match s.trim().trim_matches('"') {
@@ -249,12 +257,18 @@ impl RangeCmd {
             .trim_end_matches('A')
             .trim_end_matches('F')
             .trim();
-        let as_f = parse_eng(raw).or_else(|| parse_eng(stripped));
+        let compact = upper.replace([' ', '_'], "");
+        let as_f = parse_eng(raw)
+            .or_else(|| parse_eng(stripped))
+            .or_else(|| parse_eng(&compact));
         (0..self.len()).find(|&i| {
             let (key, val) = self.get_opt(i);
+            let key_c = key.replace([' ', '_'], "");
             key.eq_ignore_ascii_case(raw)
+                || key_c.eq_ignore_ascii_case(&compact)
                 || val.eq_ignore_ascii_case(raw)
                 || val.eq_ignore_ascii_case(&upper)
+                || val.eq_ignore_ascii_case(&compact)
                 || as_f.is_some_and(|a| {
                     parse_eng(val)
                         .is_some_and(|b| (a - b).abs() <= 1e-15 * a.abs().max(b.abs()).max(1.0))

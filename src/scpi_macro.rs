@@ -223,23 +223,33 @@ pub fn is_query(cmd: &str) -> bool {
     cmd.trim().trim_end_matches(['\r', '\n']).ends_with('?')
 }
 
-/// What a query reply should be parsed as (must stay in lockstep with sends).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum QueryKind {
-    Meas,
-    Func,
-    Rate,
-    Beep,
-    Auto,
-    Unknown,
+/// One FUNC/RATE/BEEP/AUTO(/RANGE) poll, applied atomically.
+///
+/// Compact Owon `RANGE?` returns the live window even in autorange (`50 mV` on
+/// a shorted VDC input). That string must not be treated as a manual range
+/// unless `AUTO?` is 0 in the **same** snapshot.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MeterStatus {
+    pub rate: Option<String>,
+    pub beep: Option<bool>,
+    pub auto: Option<bool>,
+    pub range: Option<String>,
 }
 
-/// Meter state reported back to the UI after a query.
-#[derive(Clone, Debug, PartialEq)]
-pub enum MeterStatus {
-    Rate(String),
-    Beep(bool),
-    AutoRange(bool),
+/// UI range implied by one [`MeterStatus`] snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SnapshotRange {
+    Auto,
+    Manual(String),
+}
+
+/// `None` = this snapshot does not know AUTO, so leave the UI range alone.
+pub fn snapshot_range(auto: Option<bool>, range: Option<&str>) -> Option<SnapshotRange> {
+    match auto {
+        Some(true) => Some(SnapshotRange::Auto),
+        Some(false) => Some(SnapshotRange::Manual(range.unwrap_or("").trim().to_owned())),
+        None => None,
+    }
 }
 
 /// UI changes implied by a command we just sent (optimistic, before query).
@@ -253,35 +263,6 @@ pub enum ScpiUiHint {
     Beep(bool),
     ContThreshold(u32),
     DiodThreshold(f32),
-}
-
-pub fn query_kind(cmd: &str) -> Option<QueryKind> {
-    let t = cmd
-        .trim()
-        .trim_end_matches(['\r', '\n'])
-        .replace(' ', "")
-        .to_ascii_uppercase();
-    if !t.ends_with('?') || t == "*IDN?" {
-        return None;
-    }
-    Some(if t == "MEAS?" || t == "MEAS1?" {
-        QueryKind::Meas
-    } else if t == "FUNC?" || t == "FUNCTION?" || t.ends_with(":FUNC?") || t.ends_with(":FUNCTION?")
-    {
-        QueryKind::Func
-    } else if t == "RATE?" {
-        QueryKind::Rate
-    } else if t == "AUTO?" {
-        QueryKind::Auto
-    } else if t.starts_with("SYST:BEEP") {
-        QueryKind::Beep
-    } else {
-        QueryKind::Unknown
-    })
-}
-
-pub fn ui_refresh_queries() -> [&'static str; 4] {
-    ["FUNC?\n", "RATE?\n", "SYST:BEEP:STATe?\n", "AUTO?\n"]
 }
 
 /// Best-effort parse of a compact-Owon set command into a UI hint.
@@ -320,10 +301,15 @@ pub fn ui_hint_from_command(cmd: &str) -> Option<ScpiUiHint> {
 }
 
 fn parse_beep_token(rest: &str) -> Option<bool> {
-    match rest {
-        "ON" | "1" => Some(true),
-        "OFF" | "0" => Some(false),
-        _ => None,
+    let t = rest.trim().trim_matches('"');
+    if t.eq_ignore_ascii_case("ON") || t.eq_ignore_ascii_case("NO") || t == "1" {
+        // Compact Owon `SYST:BEEP:STATe?` is `ON` on some firmware and `NO` on
+        // others (e.g. XDM1041 V4.2.0). Both mean enabled.
+        Some(true)
+    } else if t.eq_ignore_ascii_case("OFF") || t == "0" {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -362,6 +348,67 @@ pub fn looks_like_idn(s: &str) -> bool {
 
 pub fn parse_beep_reply(raw: &str) -> Option<bool> {
     parse_beep_token(raw.trim().trim_matches('"'))
+}
+
+/// Classify a reply by content so USB-batched / reordered lines still work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplyClass {
+    Func,
+    Rate,
+    Beep,
+    Auto,
+    Range,
+    Meas,
+    Unknown,
+}
+
+pub fn classify_reply(line: &str) -> ReplyClass {
+    let u = line.trim().trim_matches('"');
+    if u.is_empty() {
+        return ReplyClass::Unknown;
+    }
+    if MeterMode::from_func_reply(u).is_some() {
+        return ReplyClass::Func;
+    }
+    if matches!(u, "S" | "M" | "F") {
+        return ReplyClass::Rate;
+    }
+    if u.eq_ignore_ascii_case("ON") || u.eq_ignore_ascii_case("NO") || u.eq_ignore_ascii_case("OFF")
+    {
+        return ReplyClass::Beep;
+    }
+    if u == "0" || u == "1" {
+        return ReplyClass::Auto;
+    }
+    if parse_range_reply(u).is_some() {
+        return ReplyClass::Range;
+    }
+    if u.parse::<f64>().is_ok() {
+        return ReplyClass::Meas;
+    }
+    ReplyClass::Unknown
+}
+
+/// Compact Owon `RANGE?` is `50 V`, `5 V`, or a small index. Reject FUNC? / `MEAS?`.
+pub fn parse_range_reply(raw: &str) -> Option<String> {
+    let t = raw.trim().trim_matches('"');
+    if t.is_empty() {
+        return None;
+    }
+    if crate::multimeter::MeterMode::from_func_reply(t).is_some() {
+        return None;
+    }
+    let compact = t.replace(' ', "");
+    if compact.contains(['E', 'e']) {
+        return None;
+    }
+    if compact.parse::<f64>().is_ok() && compact.contains('.') {
+        return None;
+    }
+    if !compact.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(t.to_owned())
 }
 
 /// User-facing SCPI that the recorder should keep. Session/poll traffic is excluded.
@@ -577,22 +624,78 @@ CONF:VOLT:AC 500V
     }
 
     #[test]
+    fn range_cmd_matches_meter_range_text() {
+        let vdc =
+            crate::multimeter::RangeCmd::new("OWON XDM1041", crate::multimeter::MeterMode::Vdc)
+                .unwrap();
+        assert_eq!(vdc.index_of_param("50 V"), Some(4));
+        assert_eq!(vdc.index_of_param("50V"), Some(4));
+        let vac =
+            crate::multimeter::RangeCmd::new("OWON XDM1041", crate::multimeter::MeterMode::Vac)
+                .unwrap();
+        assert_eq!(vac.index_of_param("5 V"), Some(2));
+        assert_eq!(vac.get_opt(0).0, "auto");
+    }
+
+    #[test]
+    fn beep_reply_accepts_on_and_no() {
+        assert_eq!(parse_beep_reply("ON"), Some(true));
+        assert_eq!(parse_beep_reply("NO"), Some(true));
+        assert_eq!(parse_beep_reply("no"), Some(true));
+        assert_eq!(parse_beep_reply("OFF"), Some(false));
+        assert_eq!(parse_beep_reply("1"), Some(true));
+        assert_eq!(parse_beep_reply("0"), Some(false));
+        assert_eq!(parse_beep_reply("VOLT"), None);
+    }
+
+    #[test]
+    fn classify_reply_uses_content_not_order() {
+        assert_eq!(classify_reply("\"VOLT AC\""), ReplyClass::Func);
+        assert_eq!(classify_reply("VOLT"), ReplyClass::Func);
+        assert_eq!(classify_reply("F"), ReplyClass::Rate);
+        assert_eq!(classify_reply("OFF"), ReplyClass::Beep);
+        assert_eq!(classify_reply("ON"), ReplyClass::Beep);
+        assert_eq!(classify_reply("NO"), ReplyClass::Beep);
+        assert_eq!(classify_reply("1"), ReplyClass::Auto);
+        assert_eq!(classify_reply("0"), ReplyClass::Auto);
+        assert_eq!(classify_reply("50 mV"), ReplyClass::Range);
+        assert_eq!(classify_reply("50 V"), ReplyClass::Range);
+        assert_eq!(classify_reply("5.524573E-01"), ReplyClass::Meas);
+        assert_eq!(classify_reply("1.0"), ReplyClass::Meas);
+    }
+
+    #[test]
+    fn auto_range_snapshot_ignores_live_window() {
+        assert_eq!(
+            snapshot_range(Some(true), Some("50 mV")),
+            Some(SnapshotRange::Auto)
+        );
+        assert_eq!(
+            snapshot_range(Some(false), Some("50 V")),
+            Some(SnapshotRange::Manual("50 V".into()))
+        );
+        assert_eq!(snapshot_range(None, Some("50 mV")), None);
+    }
+
+    #[test]
+    fn parse_range_reply_rejects_meas() {
+        assert_eq!(parse_range_reply("4"), Some("4".into()));
+        assert_eq!(parse_range_reply("50 V"), Some("50 V".into()));
+        assert_eq!(parse_range_reply("5 V"), Some("5 V".into()));
+        assert_eq!(parse_range_reply("500 mV"), Some("500 mV".into()));
+        assert_eq!(parse_range_reply("VOLT AC"), None);
+        assert_eq!(parse_range_reply("F"), None);
+        assert_eq!(parse_range_reply("OFF"), None);
+        assert_eq!(parse_range_reply("+3.210000E-01"), None);
+        assert_eq!(parse_range_reply("0.000000E+00"), None);
+    }
+
+    #[test]
     fn looks_like_idn_rejects_meas_floats() {
         assert!(looks_like_idn("OWON,XDM1041,abc,V4.8.0"));
         assert!(looks_like_idn("XDM1041"));
         assert!(!looks_like_idn("1.2345"));
         assert!(!looks_like_idn("+3.210000E-01"));
         assert!(!looks_like_idn(""));
-    }
-
-    #[test]
-    fn query_kind_classifies_refresh() {
-        assert_eq!(query_kind("FUNC?\n"), Some(QueryKind::Func));
-        assert_eq!(query_kind("RATE?"), Some(QueryKind::Rate));
-        assert_eq!(query_kind("SYST:BEEP:STATe?\n"), Some(QueryKind::Beep));
-        assert_eq!(query_kind("AUTO?"), Some(QueryKind::Auto));
-        assert_eq!(query_kind("MEAS?\n"), Some(QueryKind::Meas));
-        assert_eq!(query_kind("*IDN?\n"), None);
-        assert_eq!(query_kind("RATE F"), None);
     }
 }

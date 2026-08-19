@@ -1,4 +1,4 @@
-use egui::{FontFamily, FontId, SliderClamping, Vec2};
+use egui::{AtomExt, FontFamily, FontId, SliderClamping, TextWrapMode, Vec2};
 use egui_dock::{DockArea, DockState, Style, TabViewer};
 use egui_dropdown::DropDownBox;
 use mio_serial::{DataBits, SerialPort, SerialPortBuilderExt};
@@ -6,6 +6,24 @@ use std::collections::VecDeque;
 
 use crate::helpers::{format_measurement, powered_by};
 use crate::multimeter::{GenScpi, MeterMode};
+
+/// Mode-grid button size. Macro buttons use this as a minimum.
+const MODE_BUTTON_SIZE: Vec2 = Vec2 { x: 70.0, y: 20.0 };
+/// Wrap main-window macro buttons after this many mode-grid columns.
+const MACRO_GRID_COLUMNS: usize = 4;
+
+/// Outer width of two mode buttons plus the gap between them.
+fn two_mode_button_span(ui: &egui::Ui) -> f32 {
+    2.0 * MODE_BUTTON_SIZE.x + ui.spacing().item_spacing.x
+}
+
+fn macro_name_fits_one_cell(ui: &egui::Ui, name: &str) -> bool {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(name.to_owned(), font_id, ui.visuals().text_color());
+    galley.size().x + 2.0 * ui.spacing().button_padding.x <= MODE_BUTTON_SIZE.x
+}
 
 // Enum to represent tab types
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -103,6 +121,115 @@ impl super::MyApp {
                 self.queue_scpi(format!("DIOD:THREshold {}\n", self.diod_threshold), true);
             }
         }
+    }
+
+    fn scpi_macros_on_main(&self) -> bool {
+        self.connection_type == super::ConnectionType::ScpiSerial
+            && self.connection_state == super::ConnectionState::Connected
+            && !self.is_read_only()
+    }
+
+    fn show_record_macro_button(&mut self, ui: &mut egui::Ui) {
+        if !self.scpi_macros_on_main() {
+            return;
+        }
+        let rec_label = if self.macro_recording {
+            "Stop recording"
+        } else {
+            "Record macro"
+        };
+        let rec_btn = egui::Button::new(rec_label).selected(self.macro_recording);
+        if ui.add(rec_btn).clicked() {
+            if self.macro_recording {
+                self.finish_macro_recording();
+            } else {
+                self.macro_recording = true;
+                self.macro_record_buffer.clear();
+            }
+        }
+        if self.macro_recording {
+            ui.colored_label(egui::Color32::RED, "REC");
+        }
+    }
+
+    fn matching_button_macros(&self) -> Vec<(String, String)> {
+        let idn = self.device.lock().unwrap().clone();
+        if idn.is_empty() {
+            return Vec::new();
+        }
+        self.scpi_macros
+            .iter()
+            .filter(|m| m.show_as_button && m.applies_to.matches(&idn))
+            .map(|m| (m.id.clone(), m.name.clone()))
+            .collect()
+    }
+
+    fn show_macro_buttons(&mut self, ui: &mut egui::Ui) {
+        let buttons = self.matching_button_macros();
+        if buttons.is_empty() {
+            return;
+        }
+        // `separator` / `horizontal_wrapped` expand to available width. This
+        // box sits in a horizontal row, so that would stretch infinitely.
+        let width = ui.min_rect().width();
+        let two_cell = two_mode_button_span(ui).min(width);
+        let two_cell_text = (two_cell - 2.0 * ui.spacing().button_padding.x).max(1.0);
+        let mut rows: Vec<Vec<(String, String, bool)>> = vec![Vec::new()];
+        let mut row_cols = 0usize;
+        for (id, name) in buttons {
+            let two_wide = !macro_name_fits_one_cell(ui, &name);
+            let cols = if two_wide { 2 } else { 1 };
+            if row_cols > 0 && row_cols + cols > MACRO_GRID_COLUMNS {
+                rows.push(Vec::new());
+                row_cols = 0;
+            }
+            rows.last_mut().unwrap().push((id, name, two_wide));
+            row_cols += cols;
+        }
+        ui.scope(|ui| {
+            ui.set_width(width);
+            ui.separator();
+            for row in rows {
+                ui.horizontal(|ui| {
+                    for (id, name, two_wide) in row {
+                        let clicked = ui
+                            .scope(|ui| {
+                                let (slot_w, label, min_size) = if two_wide {
+                                    (
+                                        two_cell,
+                                        name.atom_max_width(two_cell_text)
+                                            .atom_shrink(true)
+                                            .atom_align(egui::Align2::CENTER_CENTER),
+                                        Vec2::new(two_cell, MODE_BUTTON_SIZE.y),
+                                    )
+                                } else {
+                                    (
+                                        MODE_BUTTON_SIZE.x,
+                                        name.atom_align(egui::Align2::CENTER_CENTER),
+                                        MODE_BUTTON_SIZE,
+                                    )
+                                };
+                                ui.set_min_width(slot_w);
+                                ui.set_max_width(slot_w);
+                                let btn = egui::Button::new(label)
+                                    .wrap_mode(TextWrapMode::Wrap)
+                                    .min_size(min_size);
+                                ui.add(btn).clicked()
+                            })
+                            .inner;
+                        if clicked
+                            && let Some(body) = self
+                                .scpi_macros
+                                .iter()
+                                .find(|m| m.id == id)
+                                .map(|m| m.body.clone())
+                        {
+                            self.run_macro_body(&body, false);
+                        }
+                    }
+                });
+            }
+        });
     }
 
     /// Called by the framework to save state before shutdown.
@@ -208,17 +335,8 @@ impl super::MyApp {
             }
         }
 
-        let mut status_updates = Vec::new();
-        if let Some(ref mut rx) = self.status_rx {
-            while let Ok(status) = rx.try_recv() {
-                status_updates.push(status);
-            }
-        }
-        for status in status_updates {
-            self.apply_meter_status(status);
-        }
-
-        // Process mode updates (SCPI / Victor 86E / HID)
+        // Mode first: `adopt_mode` resets range to auto. The status snapshot
+        // then applies AUTO?/RANGE? from the same poll.
         let mut mode_updates = Vec::new();
         if let Some(ref mut rx) = self.mode_rx {
             while let Ok(update) = rx.try_recv() {
@@ -231,6 +349,16 @@ impl super::MyApp {
             if changed && self.value_debug {
                 println!("Updated metermode to: {mode:?}");
             }
+        }
+
+        let mut status_updates = Vec::new();
+        if let Some(ref mut rx) = self.status_rx {
+            while let Ok(status) = rx.try_recv() {
+                status_updates.push(status);
+            }
+        }
+        for status in status_updates {
+            self.apply_meter_status(status);
         }
 
         // Handle graph and histogram updates and recording based on the configured interval
@@ -513,6 +641,7 @@ impl super::MyApp {
                     if ui.button("Start Recording").clicked() {
                         self.recording_open = true;
                     }
+                    self.show_record_macro_button(ui);
                 });
 
                 ui.horizontal(|ui| {
@@ -718,7 +847,6 @@ impl super::MyApp {
                                     .italics(),
                             );
                         }
-                        let btn_size = Vec2 { x: 70.0, y: 20.0 };
                         let read_only = self.is_read_only();
                         ui.add_enabled_ui(!read_only, |ui| {
                             const ROWS: [&[MeterMode]; 3] = [
@@ -745,7 +873,7 @@ impl super::MyApp {
                                         }
                                         let btn = egui::Button::new(mode.button_label())
                                             .selected(self.metermode == mode)
-                                            .min_size(btn_size);
+                                            .min_size(MODE_BUTTON_SIZE);
                                         if ui.add(btn).clicked() {
                                             self.set_mode(mode);
                                         }
@@ -753,6 +881,9 @@ impl super::MyApp {
                                 });
                             }
                         }); // add_enabled_ui
+                        if self.scpi_macros_on_main() {
+                            self.show_macro_buttons(ui);
+                        }
                     });
                 });
 
@@ -798,6 +929,7 @@ impl super::MyApp {
                                     |i| rangecmd.get_opt(i).0,
                                 );
                                 if rangebox.changed() {
+                                    self.meter_auto_range = self.curr_range == 0;
                                     self.confstring =
                                         rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
                                     self.queue_scpi(self.confstring.clone(), true);
@@ -849,51 +981,6 @@ impl super::MyApp {
                     });
                 });
             });
-
-            if self.connection_type == super::ConnectionType::ScpiSerial
-                && self.connection_state == super::ConnectionState::Connected
-                && !self.is_read_only()
-            {
-                let idn = self.device.lock().unwrap().clone();
-                if !idn.is_empty() {
-                    ui.horizontal_wrapped(|ui| {
-                        let rec_label = if self.macro_recording {
-                            "Stop recording"
-                        } else {
-                            "Record macro"
-                        };
-                        let rec_btn = egui::Button::new(rec_label).selected(self.macro_recording);
-                        if ui.add(rec_btn).clicked() {
-                            if self.macro_recording {
-                                self.finish_macro_recording();
-                            } else {
-                                self.macro_recording = true;
-                                self.macro_record_buffer.clear();
-                            }
-                        }
-                        if self.macro_recording {
-                            ui.colored_label(egui::Color32::RED, "REC");
-                        }
-                        let buttons: Vec<(String, String)> = self
-                            .scpi_macros
-                            .iter()
-                            .filter(|m| m.show_as_button && m.applies_to.matches(&idn))
-                            .map(|m| (m.id.clone(), m.name.clone()))
-                            .collect();
-                        for (id, name) in buttons {
-                            if ui.button(name).clicked()
-                                && let Some(body) = self
-                                    .scpi_macros
-                                    .iter()
-                                    .find(|m| m.id == id)
-                                    .map(|m| m.body.clone())
-                            {
-                                self.run_macro_body(&body, false);
-                            }
-                        }
-                    });
-                }
-            }
 
             ui.separator();
 

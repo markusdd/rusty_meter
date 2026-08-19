@@ -16,9 +16,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::multimeter::{GenScpi, MeterMode, RangeCmd, RateCmd, ScpiMode};
 use crate::scpi_macro::{
-    BootstrapSettings, MacroTarget, MeterStatus, ScpiMacro, ScpiUiHint, bootstrap_commands,
-    classify_idn, ensure_newline, idn_model, is_recordable_scpi, looks_like_idn, parse_macro_body,
-    range_table_meter, ui_hint_from_command, ui_refresh_queries,
+    BootstrapSettings, MacroTarget, MeterStatus, ScpiMacro, ScpiUiHint, SnapshotRange,
+    bootstrap_commands, classify_idn, ensure_newline, idn_model, is_recordable_scpi,
+    looks_like_idn, parse_macro_body, range_table_meter, snapshot_range, ui_hint_from_command,
 };
 
 // Submodules for split impl blocks
@@ -237,6 +237,8 @@ pub struct MyApp {
     #[serde(skip)]
     poll_ready: Arc<AtomicBool>,
     #[serde(skip)]
+    refresh_requested: Arc<AtomicBool>,
+    #[serde(skip)]
     is_init: bool,
     #[serde(skip)]
     ratecmd: RateCmd,
@@ -244,6 +246,8 @@ pub struct MyApp {
     rangecmd: Option<RangeCmd>,
     #[serde(skip)]
     curr_range: usize,
+    #[serde(skip)]
+    meter_auto_range: bool,
     #[serde(skip)]
     serial_rx: Option<mpsc::Receiver<Option<f64>>>, // handle measurements
     #[serde(skip)]
@@ -357,12 +361,14 @@ impl Default for MyApp {
             macro_record_buffer: String::new(),
             applied_idn: None,
             poll_ready: Arc::new(AtomicBool::new(false)),
+            refresh_requested: Arc::new(AtomicBool::new(false)),
             scpi_macros: vec![],
             is_init: false,
             ratecmd: RateCmd::default(),
             curr_rate: 0,
             rangecmd: Some(RangeCmd::default()),
             curr_range: 0,
+            meter_auto_range: true,
             reverse_graph: false, // Default to right-to-left (most recent on right)
             graph_line_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             hist_bar_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
@@ -462,6 +468,7 @@ impl MyApp {
             *app.value_debug_shared.lock().unwrap() = app.value_debug;
             *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
             app.poll_ready.store(false, Ordering::SeqCst);
+            app.refresh_requested.store(false, Ordering::SeqCst);
             return app;
         }
 
@@ -517,7 +524,7 @@ impl MyApp {
             self.queue_scpi(cmd.clone(), record);
         }
         self.apply_scpi_hints(&parsed.commands);
-        self.queue_ui_refresh();
+        self.request_ui_refresh();
     }
 
     fn apply_scpi_hints(&mut self, cmds: &[String]) {
@@ -539,6 +546,7 @@ impl MyApp {
                         .and_then(|r| r.index_of_param(&param))
                     {
                         self.curr_range = idx;
+                        self.meter_auto_range = idx == 0;
                     }
                 }
             }
@@ -553,25 +561,48 @@ impl MyApp {
         }
     }
 
-    fn queue_ui_refresh(&mut self) {
-        for q in ui_refresh_queries() {
-            self.queue_scpi(q, false);
+    fn request_ui_refresh(&mut self) {
+        self.refresh_requested.store(true, Ordering::SeqCst);
+    }
+
+    fn apply_range_raw(&mut self, raw: &str) {
+        if raw.is_empty() {
+            return;
+        }
+        if let Ok(n) = raw.parse::<usize>() {
+            if n == 0 {
+                self.curr_range = 0;
+                return;
+            }
+            if self.rangecmd.as_ref().is_some_and(|r| n < r.len()) {
+                self.curr_range = n;
+                return;
+            }
+        }
+        if let Some(idx) = self.rangecmd.as_ref().and_then(|r| r.index_of_param(raw)) {
+            self.curr_range = idx;
         }
     }
 
     fn apply_meter_status(&mut self, status: MeterStatus) {
-        match status {
-            MeterStatus::Rate(code) => {
-                if let Some(idx) = self.ratecmd.index_of_scpi(&code) {
-                    self.curr_rate = idx;
-                }
+        if let Some(code) = status.rate
+            && let Some(idx) = self.ratecmd.index_of_scpi(&code)
+        {
+            self.curr_rate = idx;
+        }
+        if let Some(on) = status.beep {
+            self.beeper_enabled = on;
+        }
+        match snapshot_range(status.auto, status.range.as_deref()) {
+            Some(SnapshotRange::Auto) => {
+                self.meter_auto_range = true;
+                self.curr_range = 0;
             }
-            MeterStatus::Beep(on) => self.beeper_enabled = on,
-            MeterStatus::AutoRange(auto) => {
-                if auto {
-                    self.curr_range = 0;
-                }
+            Some(SnapshotRange::Manual(raw)) => {
+                self.meter_auto_range = false;
+                self.apply_range_raw(&raw);
             }
+            None => {}
         }
     }
 
@@ -611,7 +642,7 @@ impl MyApp {
             }
             self.apply_scpi_hints(&parsed.commands);
         }
-        self.queue_ui_refresh();
+        self.request_ui_refresh();
         self.poll_ready.store(true, Ordering::SeqCst);
     }
 
@@ -694,6 +725,7 @@ impl MyApp {
             RangeCmd::new(&self.curr_meter, mode)
         };
         self.curr_range = 0;
+        self.meter_auto_range = true;
     }
 
     fn set_mode(&mut self, mode: MeterMode) {
@@ -744,6 +776,7 @@ impl MyApp {
         drop(device);
         self.applied_idn = None;
         self.poll_ready.store(false, Ordering::SeqCst);
+        self.refresh_requested.store(false, Ordering::SeqCst);
         self.macro_recording = false;
         self.curr_meas = f64::NAN; // Reset measurement
         self.values.clear(); // Clear graph data
