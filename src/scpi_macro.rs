@@ -2,6 +2,8 @@
 //!
 //! User-authored macros are persisted on [`crate::app::MyApp`]. The built-in
 //! dialect bootstrap is generated from current UI settings and is not stored.
+//! SPE/Kiprim bootstrap sends `OUTP OFF` first, then last VOLT/CURR/limits;
+//! it never turns the output on.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +16,8 @@ pub enum ScpiFamily {
     OwonMeas,
     /// XDM6000 Keysight-like dialect. Bootstrap is a stub until that driver exists.
     OwonXdm6000,
+    /// Kiprim DC* / Owon SPE* single-channel PSU: `VOLT`/`CURR`/`OUTP`/`MEAS:ALL:INFO?`.
+    SpePsu,
     Unknown,
 }
 
@@ -24,6 +28,7 @@ pub enum MacroTarget {
     #[default]
     OwonMeas,
     OwonXdm6000,
+    SpePsu,
     /// Exact IDN model field, e.g. `"XDM1041"`.
     Model(String),
     /// Case-insensitive substring of the full IDN string.
@@ -40,6 +45,7 @@ impl MacroTarget {
             Self::AllScpi => true,
             Self::OwonMeas => classify_idn(idn) == ScpiFamily::OwonMeas,
             Self::OwonXdm6000 => classify_idn(idn) == ScpiFamily::OwonXdm6000,
+            Self::SpePsu => classify_idn(idn) == ScpiFamily::SpePsu,
             Self::Model(model) => idn_model(idn).eq_ignore_ascii_case(model.trim()),
             Self::IdnContains(needle) => {
                 !needle.is_empty()
@@ -55,6 +61,7 @@ impl MacroTarget {
             Self::AllScpi => "All SCPI meters".to_owned(),
             Self::OwonMeas => "Owon XDM 1/2/3xxx".to_owned(),
             Self::OwonXdm6000 => "Owon XDM 6000".to_owned(),
+            Self::SpePsu => "Kiprim DC / Owon SPE PSU".to_owned(),
             Self::Model(m) if m.is_empty() => "This meter".to_owned(),
             Self::Model(m) => format!("This meter ({m})"),
             Self::IdnContains(_) => "Custom IDN substring".to_owned(),
@@ -106,6 +113,10 @@ pub struct BootstrapSettings {
     pub cont_threshold: u32,
     pub diod_threshold: f32,
     pub lock_remote: bool,
+    pub psu_set_v: f32,
+    pub psu_set_i: f32,
+    pub psu_ovp: f32,
+    pub psu_ocp: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -144,6 +155,9 @@ fn classify_model(model: &str) -> ScpiFamily {
     if m.starts_with("XDM1") || m.starts_with("XDM2") || m.starts_with("XDM3") {
         return ScpiFamily::OwonMeas;
     }
+    if m.starts_with("DC") || m.starts_with("SPE") {
+        return ScpiFamily::SpePsu;
+    }
     ScpiFamily::Unknown
 }
 
@@ -151,6 +165,7 @@ fn classify_model(model: &str) -> ScpiFamily {
 pub fn range_table_meter(idn: &str) -> String {
     match classify_idn(idn) {
         ScpiFamily::OwonMeas => "OWON XDM1041".to_owned(),
+        ScpiFamily::SpePsu => crate::psu::model_from_idn(idn).display_name(),
         ScpiFamily::OwonXdm6000 | ScpiFamily::Unknown => {
             let model = idn_model(idn);
             if model.is_empty() {
@@ -179,6 +194,18 @@ pub fn bootstrap_commands(family: ScpiFamily, s: &BootstrapSettings) -> Vec<Stri
             if s.lock_remote {
                 cmds.push("SYST:REM\n".to_owned());
             }
+            cmds
+        }
+        ScpiFamily::SpePsu => {
+            let mut cmds = Vec::new();
+            if s.lock_remote {
+                cmds.push("SYST:REM\n".to_owned());
+            }
+            cmds.push(crate::psu::set_output(false));
+            cmds.push(crate::psu::set_volt(s.psu_set_v));
+            cmds.push(crate::psu::set_curr(s.psu_set_i));
+            cmds.push(crate::psu::set_ovp(s.psu_ovp));
+            cmds.push(crate::psu::set_ocp(s.psu_ocp));
             cmds
         }
         // Filled in when the XDM6000 driver lands. Empty so we never send RATE S/M/F.
@@ -263,6 +290,11 @@ pub enum ScpiUiHint {
     Beep(bool),
     ContThreshold(u32),
     DiodThreshold(f32),
+    PsuOutput(bool),
+    PsuVolt(f32),
+    PsuCurr(f32),
+    PsuOvp(f32),
+    PsuOcp(f32),
 }
 
 /// Best-effort parse of a compact-Owon set command into a UI hint.
@@ -296,8 +328,32 @@ pub fn ui_hint_from_command(cmd: &str) -> Option<ScpiUiHint> {
     {
         return rest.parse::<f32>().ok().map(ScpiUiHint::DiodThreshold);
     }
+    if let Some(hint) = parse_psu_hint(&compact) {
+        return Some(hint);
+    }
 
     parse_conf_hint(&compact)
+}
+
+/// Macro bodies are free-form text. Button/slider actions already hold the
+/// structured value and do not go through here.
+fn parse_psu_hint(compact: &str) -> Option<ScpiUiHint> {
+    if let Some(rest) = compact.strip_prefix("VOLT:LIM") {
+        return rest.parse().ok().map(ScpiUiHint::PsuOvp);
+    }
+    if let Some(rest) = compact.strip_prefix("CURR:LIM") {
+        return rest.parse().ok().map(ScpiUiHint::PsuOcp);
+    }
+    if let Some(rest) = compact.strip_prefix("VOLT") {
+        return rest.parse().ok().map(ScpiUiHint::PsuVolt);
+    }
+    if let Some(rest) = compact.strip_prefix("CURR") {
+        return rest.parse().ok().map(ScpiUiHint::PsuCurr);
+    }
+    if let Some(rest) = compact.strip_prefix("OUTP") {
+        return crate::psu::parse_outp_reply(rest).map(ScpiUiHint::PsuOutput);
+    }
+    None
 }
 
 fn parse_beep_token(rest: &str) -> Option<bool> {
@@ -340,10 +396,13 @@ fn parse_conf_hint(compact: &str) -> Option<ScpiUiHint> {
 /// `*IDN?` replies contain commas / vendor text. Leftover `MEAS?` values parse as floats.
 pub fn looks_like_idn(s: &str) -> bool {
     let t = s.trim();
-    if t.is_empty() {
+    if t.is_empty() || t.parse::<f64>().is_ok() {
         return false;
     }
-    t.parse::<f64>().is_err()
+    if crate::psu::parse_meas_line(t).is_some() {
+        return false;
+    }
+    t.chars().any(|c| c.is_ascii_alphabetic())
 }
 
 pub fn parse_beep_reply(raw: &str) -> Option<bool> {
@@ -464,6 +523,14 @@ mod tests {
         assert_eq!(classify_idn("OWON,XDM6000,s,v"), ScpiFamily::OwonXdm6000);
         assert_eq!(classify_idn("OWON,XDM6241,s,v"), ScpiFamily::OwonXdm6000);
         assert_eq!(classify_idn("KEYSIGHT,34465A,s,v"), ScpiFamily::Unknown);
+        assert_eq!(
+            classify_idn("KIPRIM,DC620S,sn,FV:V1.0.2"),
+            ScpiFamily::SpePsu
+        );
+        assert_eq!(
+            classify_idn("OWON,SPE6103,sn,FV:V1.0.0"),
+            ScpiFamily::SpePsu
+        );
         assert_eq!(classify_idn(""), ScpiFamily::Unknown);
     }
 
@@ -480,6 +547,10 @@ mod tests {
             cont_threshold: 50,
             diod_threshold: 2.0,
             lock_remote: true,
+            psu_set_v: 5.0,
+            psu_set_i: 2.0,
+            psu_ovp: 60.0,
+            psu_ocp: 20.0,
         }
     }
 
@@ -515,6 +586,34 @@ mod tests {
         let s = settings();
         assert!(bootstrap_commands(ScpiFamily::OwonXdm6000, &s).is_empty());
         assert!(bootstrap_commands(ScpiFamily::Unknown, &s).is_empty());
+    }
+
+    #[test]
+    fn bootstrap_psu_off_then_setpoints_never_on() {
+        let s = settings();
+        let cmds = bootstrap_commands(ScpiFamily::SpePsu, &s);
+        assert_eq!(
+            cmds,
+            vec![
+                "SYST:REM\n".to_owned(),
+                "OUTP OFF\n".to_owned(),
+                "VOLT 5.000\n".to_owned(),
+                "CURR 2.000\n".to_owned(),
+                "VOLT:LIM 60.000\n".to_owned(),
+                "CURR:LIM 20.000\n".to_owned(),
+            ]
+        );
+        let off = cmds.iter().position(|c| c == "OUTP OFF\n").unwrap();
+        let volt = cmds.iter().position(|c| c.starts_with("VOLT ")).unwrap();
+        assert!(off < volt);
+        assert!(!cmds.iter().any(|c| c.eq_ignore_ascii_case("OUTP ON\n")));
+
+        let mut unlocked = s;
+        unlocked.lock_remote = false;
+        let cmds = bootstrap_commands(ScpiFamily::SpePsu, &unlocked);
+        assert_eq!(cmds[0], "OUTP OFF\n");
+        assert!(!cmds.iter().any(|c| c.contains("SYST:REM")));
+        assert!(!cmds.iter().any(|c| c.eq_ignore_ascii_case("OUTP ON\n")));
     }
 
     #[test]
@@ -577,6 +676,8 @@ CONF:VOLT:AC 500V
         assert!(!MacroTarget::IdnContains("xdm6".into()).matches(idn));
         assert!(!MacroTarget::AllScpi.matches(""));
         assert!(MacroTarget::OwonXdm6000.matches("OWON,XDM6241,s,v"));
+        assert!(MacroTarget::SpePsu.matches("KIPRIM,DC620S,sn,FV:V1.0.2"));
+        assert!(!MacroTarget::SpePsu.matches(idn));
     }
 
     #[test]
@@ -620,6 +721,14 @@ CONF:VOLT:AC 500V
                 mode: MeterMode::Cont,
                 range_param: None,
             })
+        );
+        assert_eq!(
+            ui_hint_from_command("OUTP ON"),
+            Some(ScpiUiHint::PsuOutput(true))
+        );
+        assert_eq!(
+            ui_hint_from_command("VOLT 5.000"),
+            Some(ScpiUiHint::PsuVolt(5.0))
         );
     }
 

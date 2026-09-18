@@ -10,7 +10,8 @@ use mio_serial::SerialStream;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::multimeter::{MeterMode, ScpiMode};
-use crate::scpi_macro::{self, MeterStatus, ReplyClass};
+use crate::psu::{self, PsuStatus, PsuUpdate};
+use crate::scpi_macro::{self, MeterStatus, ReplyClass, ScpiFamily};
 
 const SERIAL_TOKEN: Token = Token(0);
 
@@ -21,6 +22,8 @@ const UI_SYNC_INTERVAL: Duration = Duration::from_millis(500);
 /// step. MEAS? is independent and must not stall.
 const STATUS_TIMEOUT: Duration = Duration::from_millis(1000);
 const MEAS_TIMEOUT: Duration = Duration::from_secs(2);
+/// SPE/Kiprim `MEAS:ALL:INFO?` is fast; a 2s stall after OUTP looks like a jump.
+const PSU_MEAS_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// One GUI status query. Replies never look like `MEAS?` (no scientific
 /// notation), so they can share the wire with measurements.
@@ -31,6 +34,11 @@ enum StatusStep {
     Beep,
     Auto,
     Range,
+    Outp,
+    SetVolt,
+    SetCurr,
+    Ovp,
+    Ocp,
 }
 
 impl StatusStep {
@@ -41,6 +49,11 @@ impl StatusStep {
             Self::Beep => "SYST:BEEP:STATe?\n",
             Self::Auto => "AUTO?\n",
             Self::Range => "RANGE?\n",
+            Self::Outp => "OUTP?\n",
+            Self::SetVolt => "VOLT?\n",
+            Self::SetCurr => "CURR?\n",
+            Self::Ovp => "VOLT:LIM?\n",
+            Self::Ocp => "CURR:LIM?\n",
         }
     }
 }
@@ -66,6 +79,17 @@ struct Session {
     last_status_done: Instant,
     last_mode: MeterMode,
     swap_diod_cont: bool,
+    family: ScpiFamily,
+    psu_snap: PsuStatus,
+    skip_outp: bool,
+    skip_set_v: bool,
+    skip_set_i: bool,
+    skip_ovp: bool,
+    skip_ocp: bool,
+    /// After a MEAS or a SET, take a measurement before the next status query.
+    psu_meas_before_status: bool,
+    /// Re-run OUTP?/VOLT? after a SET, once MEAS has gone out behind it.
+    psu_need_status: bool,
 }
 
 impl Session {
@@ -90,7 +114,20 @@ impl Session {
             last_status_done: Instant::now(),
             last_mode: mode,
             swap_diod_cont: false,
+            family: ScpiFamily::Unknown,
+            psu_snap: PsuStatus::default(),
+            skip_outp: false,
+            skip_set_v: false,
+            skip_set_i: false,
+            skip_ovp: false,
+            skip_ocp: false,
+            psu_meas_before_status: true,
+            psu_need_status: false,
         }
+    }
+
+    fn is_psu(&self) -> bool {
+        self.family == ScpiFamily::SpePsu
     }
 
     fn ask_status(&mut self, step: StatusStep) {
@@ -102,11 +139,22 @@ impl Session {
     fn start_status_cycle(&mut self) {
         self.in_status_cycle = true;
         self.snap = MeterStatus::default();
+        self.psu_snap = PsuStatus::default();
         self.skip_rate = false;
         self.skip_beep = false;
         self.skip_auto = false;
         self.skip_range = false;
-        self.ask_status(StatusStep::Func);
+        self.skip_outp = false;
+        self.skip_set_v = false;
+        self.skip_set_i = false;
+        self.skip_ovp = false;
+        self.skip_ocp = false;
+        self.psu_need_status = false;
+        if self.is_psu() {
+            self.ask_status(StatusStep::Outp);
+        } else {
+            self.ask_status(StatusStep::Func);
+        }
     }
 
     fn end_status_cycle(&mut self) {
@@ -119,6 +167,24 @@ impl Session {
 
     /// Next missing GUI field, or `None` if the snapshot is complete.
     fn next_missing_status(&self) -> Option<StatusStep> {
+        if self.is_psu() {
+            if self.psu_snap.output_on.is_none() && !self.skip_outp {
+                return Some(StatusStep::Outp);
+            }
+            if self.psu_snap.set_v.is_none() && !self.skip_set_v {
+                return Some(StatusStep::SetVolt);
+            }
+            if self.psu_snap.set_i.is_none() && !self.skip_set_i {
+                return Some(StatusStep::SetCurr);
+            }
+            if self.psu_snap.ovp.is_none() && !self.skip_ovp {
+                return Some(StatusStep::Ovp);
+            }
+            if self.psu_snap.ocp.is_none() && !self.skip_ocp {
+                return Some(StatusStep::Ocp);
+            }
+            return None;
+        }
         if self.snap.rate.is_none() && !self.skip_rate {
             return Some(StatusStep::Rate);
         }
@@ -163,8 +229,17 @@ impl Session {
 /// mio is edge-triggered: a single WRITABLE after open is easy to miss once
 /// `*IDN?` has been sent and later bootstrap commands arrive with the socket
 /// still writable. Drain whenever the queue is non-empty; WouldBlock waits.
-fn drain_sets(serial: &mut SerialStream, command_queue: &mut VecDeque<String>, debug: bool) {
-    while let Some(cmd) = command_queue.front() {
+fn drain_sets(
+    serial: &mut SerialStream,
+    command_queue: &mut VecDeque<String>,
+    debug: bool,
+    max: usize,
+) -> usize {
+    let mut sent = 0;
+    while sent < max {
+        let Some(cmd) = command_queue.front() else {
+            break;
+        };
         if scpi_macro::is_query(cmd) {
             break;
         }
@@ -172,7 +247,9 @@ fn drain_sets(serial: &mut SerialStream, command_queue: &mut VecDeque<String>, d
             break;
         }
         command_queue.pop_front();
+        sent += 1;
     }
+    sent
 }
 
 /// UI-queued `FUNC?`/`RANGE?` from an older connect path: do not send them.
@@ -191,6 +268,47 @@ fn coalesce_ui_queries(
         }
         refresh_requested.store(true, Ordering::SeqCst);
         command_queue.pop_front();
+    }
+}
+
+/// One outstanding PSU query: interleave MEAS with a single status step so
+/// OUTP?/VOLT? never sit on the wire next to MEAS:ALL:INFO?.
+fn schedule_psu_queries(
+    serial: &mut SerialStream,
+    session: &mut Session,
+    refresh_requested: &std::sync::atomic::AtomicBool,
+    debug: bool,
+) {
+    let status_outstanding = session.status_since.is_some();
+    if session.awaiting_meas || status_outstanding {
+        return;
+    }
+
+    let want_cycle = refresh_requested.load(Ordering::SeqCst)
+        || session.psu_need_status
+        || session.last_status_done.elapsed() >= UI_SYNC_INTERVAL;
+    if !session.in_status_cycle && want_cycle {
+        refresh_requested.store(false, Ordering::SeqCst);
+        session.start_status_cycle();
+    }
+
+    let send_status = session.next_status.is_some() && !session.psu_meas_before_status;
+    if send_status {
+        if let Some(step) = session.next_status
+            && write_cmd(serial, step.cmd(), debug)
+        {
+            session.next_status = None;
+            session.status = Some(step);
+            session.status_since = Some(Instant::now());
+            session.psu_meas_before_status = true;
+        }
+        return;
+    }
+
+    if write_cmd(serial, psu::meas_query(), debug) {
+        session.awaiting_meas = true;
+        session.meas_since = Some(Instant::now());
+        session.psu_meas_before_status = false;
     }
 }
 
@@ -252,11 +370,13 @@ impl super::MyApp {
         let (tx_cmd, mut rx_cmd) = mpsc::channel::<String>(100); // Channel for commands
         let (tx_mode, rx_mode) = mpsc::channel::<(MeterMode, String)>(10);
         let (tx_status, rx_status) = mpsc::channel::<MeterStatus>(16);
+        let (tx_psu, rx_psu) = mpsc::channel::<PsuUpdate>(32);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>(); // Shutdown signal
         self.serial_rx = Some(rx_data);
         self.serial_tx = Some(tx_cmd.clone());
         self.mode_rx = Some(rx_mode);
         self.status_rx = Some(rx_status);
+        self.psu_rx = Some(rx_psu);
         self.shutdown_tx = Some(shutdown_tx);
 
         let mut serial = self.serial.take().unwrap();
@@ -329,6 +449,14 @@ impl super::MyApp {
                             }
                             command_queue.push_back(cmd);
                         }
+                        // Drop an in-flight OUTP? cycle before we read its reply.
+                        // Otherwise the OFF answer is flushed, then OUTP ON is sent.
+                        if session.is_psu()
+                            && session.in_status_cycle
+                            && command_queue.iter().any(|c| !scpi_macro::is_query(c))
+                        {
+                            session.end_status_cycle();
+                        }
 
                         match poll.poll(&mut events, Some(Duration::from_millis(interval))) {
                             Ok(()) => {
@@ -366,6 +494,7 @@ impl super::MyApp {
                                                             &tx_mode,
                                                             &tx_status,
                                                             &tx_data,
+                                                            &tx_psu,
                                                             debug,
                                                         ).await;
                                                     }
@@ -394,9 +523,24 @@ impl super::MyApp {
                             }
                         }
 
-                        on_timeouts(&mut session, &tx_status, debug).await;
+                        on_timeouts(&mut session, &tx_status, &tx_psu, debug).await;
 
-                        drain_sets(&mut serial, &mut command_queue, debug);
+                        // PSU: one SET per poll tick so the user's interval
+                        // spaces `VOLT`/`CURR`/`OUTP`. A burst in one tick only
+                        // applies the first line (live DC620S).
+                        let set_budget = if session.is_psu() { 1 } else { usize::MAX };
+                        let n_sets =
+                            drain_sets(&mut serial, &mut command_queue, debug, set_budget);
+                        if n_sets > 0 && session.is_psu() {
+                            // OUTP/VOLT/CURR may drop an in-flight MEAS reply.
+                            session.awaiting_meas = false;
+                            session.meas_since = None;
+                            if session.in_status_cycle {
+                                session.end_status_cycle();
+                            }
+                            session.psu_meas_before_status = true;
+                            session.psu_need_status = true;
+                        }
                         if !shutting_down {
                             coalesce_ui_queries(
                                 &mut command_queue,
@@ -420,27 +564,37 @@ impl super::MyApp {
                         } else if !shutting_down
                             && command_queue.is_empty()
                             && poll_ready.load(Ordering::SeqCst)
+                            && !(n_sets > 0 && session.is_psu())
                         {
-                            // MEAS? first, always, on this loop's roster. Status never
-                            // occupies the measurement slot.
-                            if !session.awaiting_meas && write_cmd(&mut serial, "MEAS?\n", debug)
-                            {
-                                session.awaiting_meas = true;
-                                session.meas_since = Some(Instant::now());
-                            }
+                            if session.is_psu() {
+                                schedule_psu_queries(
+                                    &mut serial,
+                                    &mut session,
+                                    &refresh_requested,
+                                    debug,
+                                );
+                            } else {
+                                // MEAS? first, always, on this loop's roster. Status never
+                                // occupies the measurement slot.
+                                if !session.awaiting_meas && write_cmd(&mut serial, "MEAS?\n", debug)
+                                {
+                                    session.awaiting_meas = true;
+                                    session.meas_since = Some(Instant::now());
+                                }
 
-                            let want_cycle = refresh_requested.load(Ordering::SeqCst)
-                                || session.last_status_done.elapsed() >= UI_SYNC_INTERVAL;
-                            if !session.in_status_cycle && want_cycle {
-                                refresh_requested.store(false, Ordering::SeqCst);
-                                session.start_status_cycle();
-                            }
+                                let want_cycle = refresh_requested.load(Ordering::SeqCst)
+                                    || session.last_status_done.elapsed() >= UI_SYNC_INTERVAL;
+                                if !session.in_status_cycle && want_cycle {
+                                    refresh_requested.store(false, Ordering::SeqCst);
+                                    session.start_status_cycle();
+                                }
 
-                            if let Some(step) = session.next_status {
-                                if write_cmd(&mut serial, step.cmd(), debug) {
-                                    session.next_status = None;
-                                    session.status = Some(step);
-                                    session.status_since = Some(Instant::now());
+                                if let Some(step) = session.next_status {
+                                    if write_cmd(&mut serial, step.cmd(), debug) {
+                                        session.next_status = None;
+                                        session.status = Some(step);
+                                        session.status_since = Some(Instant::now());
+                                    }
                                 }
                             }
                         }
@@ -454,7 +608,7 @@ impl super::MyApp {
                     while let Ok(cmd) = rx_cmd.try_recv() {
                         command_queue.push_back(cmd);
                     }
-                    drain_sets(&mut serial, &mut command_queue, debug);
+                    let _ = drain_sets(&mut serial, &mut command_queue, debug, usize::MAX);
                     if debug {
                         println!("Shutdown flush done, leftover queue: {:?}", command_queue);
                     }
@@ -471,6 +625,7 @@ impl super::MyApp {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_line(
     session: &mut Session,
     trimmed: &str,
@@ -478,6 +633,7 @@ async fn handle_line(
     tx_mode: &mpsc::Sender<(MeterMode, String)>,
     tx_status: &mpsc::Sender<MeterStatus>,
     tx_data: &mpsc::Sender<Option<f64>>,
+    tx_psu: &mpsc::Sender<PsuUpdate>,
     debug: bool,
 ) {
     let unquoted = trimmed.trim_matches('"');
@@ -499,6 +655,7 @@ async fn handle_line(
         let mut device = device_shared.lock().unwrap();
         *device = trimmed.to_owned();
         session.scpimode = ScpiMode::Meas;
+        session.family = scpi_macro::classify_idn(trimmed);
         session.awaiting_idn = false;
         session.idn_since = None;
         session.retry_idn = false;
@@ -526,6 +683,11 @@ async fn handle_line(
                 }
             }
         }
+        return;
+    }
+
+    if session.is_psu() {
+        handle_psu_line(session, trimmed, tx_psu, debug).await;
         return;
     }
 
@@ -613,6 +775,69 @@ async fn apply_func(
     }
 }
 
+async fn handle_psu_line(
+    session: &mut Session,
+    trimmed: &str,
+    tx_psu: &mpsc::Sender<PsuUpdate>,
+    debug: bool,
+) {
+    if let Some(sample) = psu::parse_meas_line(trimmed) {
+        let _ = tx_psu.send(PsuUpdate::Sample(sample)).await;
+        session.awaiting_meas = false;
+        session.meas_since = None;
+        if debug {
+            println!(
+                "Sent PSU sample: V={} I={} P={} {:?}",
+                sample.volt, sample.curr, sample.power, sample.run
+            );
+        }
+        return;
+    }
+
+    if !session.in_status_cycle {
+        if debug {
+            println!("Ignored PSU reply: {trimmed:?}");
+        }
+        return;
+    }
+
+    match session.status {
+        Some(StatusStep::Outp) => {
+            if let Some(on) = psu::parse_outp_reply(trimmed) {
+                session.psu_snap.output_on = Some(on);
+            }
+        }
+        Some(StatusStep::SetVolt) => {
+            if let Some(v) = psu::parse_setpoint_reply(trimmed) {
+                session.psu_snap.set_v = Some(v);
+            }
+        }
+        Some(StatusStep::SetCurr) => {
+            if let Some(v) = psu::parse_setpoint_reply(trimmed) {
+                session.psu_snap.set_i = Some(v);
+            }
+        }
+        Some(StatusStep::Ovp) => {
+            if let Some(v) = psu::parse_setpoint_reply(trimmed) {
+                session.psu_snap.ovp = Some(v);
+            }
+        }
+        Some(StatusStep::Ocp) => {
+            if let Some(v) = psu::parse_setpoint_reply(trimmed) {
+                session.psu_snap.ocp = Some(v);
+            }
+        }
+        _ => {
+            if debug {
+                println!("Ignored PSU reply: {trimmed:?}");
+            }
+            return;
+        }
+    }
+    session.continue_status(debug);
+    maybe_flush_psu(session, tx_psu, debug).await;
+}
+
 async fn maybe_flush_status(
     session: &mut Session,
     tx_status: &mpsc::Sender<MeterStatus>,
@@ -631,7 +856,24 @@ async fn maybe_flush_status(
     session.end_status_cycle();
 }
 
-async fn on_timeouts(session: &mut Session, tx_status: &mpsc::Sender<MeterStatus>, debug: bool) {
+async fn maybe_flush_psu(session: &mut Session, tx_psu: &mpsc::Sender<PsuUpdate>, debug: bool) {
+    if !session.in_status_cycle || session.next_missing_status().is_some() {
+        return;
+    }
+    if debug {
+        println!("PSU status snapshot: {:?}", session.psu_snap);
+    }
+    let _ = tx_psu.send(PsuUpdate::Status(session.psu_snap)).await;
+    session.psu_snap = PsuStatus::default();
+    session.end_status_cycle();
+}
+
+async fn on_timeouts(
+    session: &mut Session,
+    tx_status: &mpsc::Sender<MeterStatus>,
+    tx_psu: &mpsc::Sender<PsuUpdate>,
+    debug: bool,
+) {
     if session.awaiting_idn
         && session
             .idn_since
@@ -648,10 +890,15 @@ async fn on_timeouts(session: &mut Session, tx_status: &mpsc::Sender<MeterStatus
         session.idn_since = None;
     }
 
+    let meas_timeout = if session.is_psu() {
+        PSU_MEAS_TIMEOUT
+    } else {
+        MEAS_TIMEOUT
+    };
     if session.awaiting_meas
         && session
             .meas_since
-            .is_some_and(|t| t.elapsed() >= MEAS_TIMEOUT)
+            .is_some_and(|t| t.elapsed() >= meas_timeout)
     {
         if debug {
             println!("SCPI timeout waiting for Meas");
@@ -686,8 +933,32 @@ async fn on_timeouts(session: &mut Session, tx_status: &mpsc::Sender<MeterStatus
                     session.skip_range = true;
                     session.continue_status(debug);
                 }
+                StatusStep::Outp => {
+                    session.skip_outp = true;
+                    session.continue_status(debug);
+                }
+                StatusStep::SetVolt => {
+                    session.skip_set_v = true;
+                    session.continue_status(debug);
+                }
+                StatusStep::SetCurr => {
+                    session.skip_set_i = true;
+                    session.continue_status(debug);
+                }
+                StatusStep::Ovp => {
+                    session.skip_ovp = true;
+                    session.continue_status(debug);
+                }
+                StatusStep::Ocp => {
+                    session.skip_ocp = true;
+                    session.continue_status(debug);
+                }
             }
-            maybe_flush_status(session, tx_status, debug).await;
+            if session.is_psu() {
+                maybe_flush_psu(session, tx_psu, debug).await;
+            } else {
+                maybe_flush_status(session, tx_status, debug).await;
+            }
         }
     }
 }

@@ -15,6 +15,7 @@ use mio_serial::{SerialPortInfo, SerialStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::multimeter::{GenScpi, MeterMode, RangeCmd, RateCmd, ScpiMode};
+use crate::psu::{PsuEditMask, PsuLive, PsuModel, PsuUpdate};
 use crate::scpi_macro::{
     BootstrapSettings, MacroTarget, MeterStatus, ScpiMacro, ScpiUiHint, SnapshotRange,
     bootstrap_commands, classify_idn, ensure_newline, idn_model, is_recordable_scpi,
@@ -113,13 +114,29 @@ pub enum TimestampFormat {
     Unix,
 }
 
+/// One numeric quantity on a sample (DMM primary, PSU V/I/P, later a DMM secondary).
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Record {
-    pub index: usize, // New field for measurement index
-    #[serde(with = "chrono::serde::ts_seconds")]
-    pub timestamp: DateTime<chrono::Utc>,
+pub struct RecordChannel {
+    pub name: String,
     pub unit: String,
     pub value: f64,
+}
+
+/// Named state on a sample (`output`, `mode`, fault bits, …).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RecordStatus {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Record {
+    pub index: usize,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timestamp: DateTime<chrono::Utc>,
+    pub channels: Vec<RecordChannel>,
+    #[serde(default)]
+    pub status: Vec<RecordStatus>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -164,10 +181,22 @@ pub struct MyApp {
     cont_threshold: u32,           // Persistent continuity threshold (0-1000 ohms)
     diod_threshold: f32,           // Persistent diode threshold (0-3.0 volts)
     lock_remote: bool,             // Persistent, whether to lock meter in remote mode
-    curr_rate: usize,              // Persistent, current sampling rate index
-    reverse_graph: bool,           // Persistent, whether to reverse graph direction
-    graph_line_color: Color32,     // Persistent, color for graph line
-    hist_bar_color: Color32,       // Persistent, color for histogram bars
+    #[serde(default)]
+    psu_set_v: f32,
+    #[serde(default)]
+    psu_set_i: f32,
+    #[serde(default)]
+    psu_ovp: f32,
+    #[serde(default)]
+    psu_ocp: f32,
+    curr_rate: usize,          // Persistent, current sampling rate index
+    reverse_graph: bool,       // Persistent, whether to reverse graph direction
+    graph_line_color: Color32, // Persistent, primary graph line (DMM / PSU voltage)
+    #[serde(default = "default_graph_line_secondary")]
+    graph_line_color_secondary: Color32, // PSU current
+    #[serde(default = "default_graph_line_tertiary")]
+    graph_line_color_tertiary: Color32, // PSU power
+    hist_bar_color: Color32,   // Persistent, color for histogram bars
     measurement_font_color: Color32, // Persistent, color for measurement box font
     box_background_color: Color32, // Persistent, background color for measurement, mode, and option boxes
     #[serde(skip)]
@@ -208,6 +237,10 @@ pub struct MyApp {
     hid_devicelist: VecDeque<(String, String)>,
     #[serde(skip)]
     values: VecDeque<f64>,
+    #[serde(skip)]
+    psu_curr_trace: VecDeque<f64>,
+    #[serde(skip)]
+    psu_power_trace: VecDeque<f64>,
     #[serde(skip)]
     hist_values: VecDeque<f64>, // Buffer for histogram data
     #[serde(skip)]
@@ -258,6 +291,21 @@ pub struct MyApp {
     mode_rx: Option<mpsc::Receiver<(MeterMode, String)>>, // Channel for mode + unit updates
     #[serde(skip)]
     status_rx: Option<mpsc::Receiver<MeterStatus>>,
+    #[serde(skip)]
+    psu_rx: Option<mpsc::Receiver<PsuUpdate>>,
+    #[serde(skip)]
+    scpi_is_psu: bool,
+    #[serde(skip)]
+    psu: PsuLive,
+    #[serde(skip)]
+    psu_model: PsuModel,
+    #[serde(skip)]
+    psu_edit: PsuEditMask,
+    /// Graph limit lines / axis span; follows sliders and commits, not in-progress typing.
+    #[serde(skip)]
+    psu_plot_v: f32,
+    #[serde(skip)]
+    psu_plot_i: f32,
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
     victor_86bcd_rx: Option<mpsc::Receiver<crate::victor_dm1107::Dm1107LiveUpdate>>,
@@ -308,6 +356,14 @@ pub struct MyApp {
     plot_dock_state: DockState<ui::PlotTab>, // Dock state for plot tabs
 }
 
+fn default_graph_line_secondary() -> Color32 {
+    Color32::from_rgb(255, 180, 40)
+}
+
+fn default_graph_line_tertiary() -> Color32 {
+    Color32::from_rgb(80, 220, 120)
+}
+
 // Enum to track connection state
 #[derive(PartialEq)]
 enum ConnectionState {
@@ -347,6 +403,8 @@ impl Default for MyApp {
             #[cfg(not(target_arch = "wasm32"))]
             hid_devicelist: VecDeque::with_capacity(4),
             values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
+            psu_curr_trace: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
+            psu_power_trace: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
             hist_values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1), // Initialize histogram buffer
             poll: Poll::new().unwrap(),
             events: Events::with_capacity(1),
@@ -371,10 +429,12 @@ impl Default for MyApp {
             meter_auto_range: true,
             reverse_graph: false, // Default to right-to-left (most recent on right)
             graph_line_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
+            graph_line_color_secondary: default_graph_line_secondary(),
+            graph_line_color_tertiary: default_graph_line_tertiary(),
             hist_bar_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             measurement_font_color: Color32::from_rgb(0, 255, 255), // Default to cyan (#00FFFF)
             box_background_color: Color32::from_rgba_unmultiplied(0, 0, 0, 255), // Default to black
-            recording_open: false, // Always start closed
+            recording_open: false,                          // Always start closed
             recording_format: RecordingFormat::Csv,
             recording_file_path: "".to_owned(),
             recording_mode: RecordingMode::FixedInterval,
@@ -388,6 +448,13 @@ impl Default for MyApp {
             shutdown_tx: None, // Initially no shutdown signal
             mode_rx: None,     // Initially no mode update channel
             status_rx: None,
+            psu_rx: None,
+            scpi_is_psu: false,
+            psu: PsuLive::default(),
+            psu_model: PsuModel::UNKNOWN,
+            psu_edit: PsuEditMask::default(),
+            psu_plot_v: 0.0,
+            psu_plot_i: 0.0,
             #[cfg(not(target_arch = "wasm32"))]
             victor_86bcd_rx: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -400,6 +467,10 @@ impl Default for MyApp {
             cont_threshold: 50,           // Default continuity threshold: 50 ohms
             diod_threshold: 2.0,          // Default diode threshold: 2.0 volts (mid-range)
             lock_remote: true,            // Default to locking remote mode
+            psu_set_v: 0.0,
+            psu_set_i: 0.0,
+            psu_ovp: 0.0,
+            psu_ocp: 0.0,
             value_debug_shared: Arc::new(Mutex::new(false)),
             poll_interval_shared: Arc::new(Mutex::new(20)),
             #[cfg(not(target_arch = "wasm32"))]
@@ -524,7 +595,25 @@ impl MyApp {
             self.queue_scpi(cmd.clone(), record);
         }
         self.apply_scpi_hints(&parsed.commands);
+        if self.scpi_is_psu {
+            self.discard_stale_psu_status();
+        }
         self.request_ui_refresh();
+    }
+
+    fn discard_stale_psu_status(&mut self) {
+        let Some(rx) = self.psu_rx.as_mut() else {
+            return;
+        };
+        let mut samples = Vec::new();
+        while let Ok(update) = rx.try_recv() {
+            if let PsuUpdate::Sample(sample) = update {
+                samples.push(sample);
+            }
+        }
+        for sample in samples {
+            self.apply_psu_update(PsuUpdate::Sample(sample));
+        }
     }
 
     fn apply_scpi_hints(&mut self, cmds: &[String]) {
@@ -558,6 +647,17 @@ impl MyApp {
             ScpiUiHint::Beep(on) => self.beeper_enabled = on,
             ScpiUiHint::ContThreshold(v) => self.cont_threshold = v,
             ScpiUiHint::DiodThreshold(v) => self.diod_threshold = v,
+            ScpiUiHint::PsuOutput(on) => self.psu.output_on = on,
+            ScpiUiHint::PsuVolt(v) => {
+                self.psu.set_v = v;
+                self.psu_plot_v = v;
+            }
+            ScpiUiHint::PsuCurr(i) => {
+                self.psu.set_i = i;
+                self.psu_plot_i = i;
+            }
+            ScpiUiHint::PsuOvp(v) => self.psu.ovp = v,
+            ScpiUiHint::PsuOcp(i) => self.psu.ocp = i,
         }
     }
 
@@ -606,6 +706,41 @@ impl MyApp {
         }
     }
 
+    fn apply_psu_update(&mut self, update: PsuUpdate) {
+        match update {
+            PsuUpdate::Sample(sample) => {
+                self.psu.apply_sample(sample);
+                self.curr_meas = sample.volt;
+                self.curr_unit = "V".to_owned();
+                self.values.push_back(sample.volt);
+                self.psu_curr_trace.push_back(sample.curr);
+                self.psu_power_trace.push_back(sample.power);
+                self.trim_graph_traces();
+            }
+            PsuUpdate::Status(status) => {
+                self.psu.apply_status(status, self.psu_edit);
+                if !self.psu_edit.set_v {
+                    self.psu_plot_v = self.psu.set_v;
+                }
+                if !self.psu_edit.set_i {
+                    self.psu_plot_i = self.psu.set_i;
+                }
+            }
+        }
+    }
+
+    fn trim_graph_traces(&mut self) {
+        while self.values.len() > self.mem_depth {
+            self.values.pop_front();
+        }
+        while self.psu_curr_trace.len() > self.mem_depth {
+            self.psu_curr_trace.pop_front();
+        }
+        while self.psu_power_trace.len() > self.mem_depth {
+            self.psu_power_trace.pop_front();
+        }
+    }
+
     fn bootstrap_settings(&self) -> BootstrapSettings {
         BootstrapSettings {
             rate_opt: self.ratecmd.get_opt(self.curr_rate).1.to_owned(),
@@ -613,7 +748,37 @@ impl MyApp {
             cont_threshold: self.cont_threshold,
             diod_threshold: self.diod_threshold,
             lock_remote: self.lock_remote,
+            psu_set_v: self.psu.set_v,
+            psu_set_i: self.psu.set_i,
+            psu_ovp: self.psu.ovp,
+            psu_ocp: self.psu.ocp,
         }
+    }
+
+    fn remember_psu_setpoints(&mut self) {
+        self.psu_set_v = self.psu.set_v;
+        self.psu_set_i = self.psu.set_i;
+        self.psu_ovp = self.psu.ovp;
+        self.psu_ocp = self.psu.ocp;
+    }
+
+    fn restore_psu_setpoints(&mut self) {
+        let model = self.psu_model;
+        self.psu.set_v = self.psu_set_v.clamp(0.0, model.v_max);
+        self.psu.set_i = self.psu_set_i.clamp(0.0, model.i_max);
+        self.psu.ovp = if self.psu_ovp > 0.0 {
+            self.psu_ovp.clamp(0.0, model.ovp_max())
+        } else {
+            model.v_max
+        };
+        self.psu.ocp = if self.psu_ocp > 0.0 {
+            self.psu_ocp.clamp(0.0, model.ocp_max())
+        } else {
+            model.i_max
+        };
+        self.psu.output_on = false;
+        self.psu_plot_v = self.psu.set_v;
+        self.psu_plot_i = self.psu.set_i;
     }
 
     fn apply_connect_sequence(&mut self, idn: &str) {
@@ -621,6 +786,15 @@ impl MyApp {
             return;
         }
         let family = classify_idn(idn);
+        self.scpi_is_psu = family == crate::scpi_macro::ScpiFamily::SpePsu;
+        if self.scpi_is_psu {
+            self.psu_model = crate::psu::model_from_idn(idn);
+            self.psu = PsuLive::default();
+            self.restore_psu_setpoints();
+            self.values.clear();
+            self.psu_curr_trace.clear();
+            self.psu_power_trace.clear();
+        }
         self.curr_meter = range_table_meter(idn);
         let bootstrap = bootstrap_commands(family, &self.bootstrap_settings());
         if self.value_debug {
@@ -642,11 +816,24 @@ impl MyApp {
             }
             self.apply_scpi_hints(&parsed.commands);
         }
+        if self.scpi_is_psu {
+            self.discard_stale_psu_status();
+        }
         self.request_ui_refresh();
         self.poll_ready.store(true, Ordering::SeqCst);
     }
 
     fn current_setup_scpi(&self) -> String {
+        if self.scpi_is_psu {
+            return [
+                crate::psu::set_volt(self.psu.set_v),
+                crate::psu::set_curr(self.psu.set_i),
+                crate::psu::set_ovp(self.psu.ovp),
+                crate::psu::set_ocp(self.psu.ocp),
+                crate::psu::set_output(self.psu.output_on),
+            ]
+            .concat();
+        }
         let mut lines = Vec::new();
         let conf = if let Some(rangecmd) = &self.rangecmd {
             rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0)
@@ -718,6 +905,8 @@ impl MyApp {
         self.metermode = mode;
         self.curr_unit = unit.unwrap_or(mode.default_unit()).to_owned();
         self.values = VecDeque::with_capacity(self.mem_depth);
+        self.psu_curr_trace = VecDeque::with_capacity(self.mem_depth);
+        self.psu_power_trace = VecDeque::with_capacity(self.mem_depth);
         self.hist_values = VecDeque::with_capacity(self.hist_mem_depth);
         self.rangecmd = if self.is_read_only() {
             None
@@ -762,6 +951,15 @@ impl MyApp {
         self.serial_rx = None; // Drop receiver to stop receiving measurements
         self.mode_rx = None; // Drop mode receiver
         self.status_rx = None;
+        self.psu_rx = None;
+        if self.scpi_is_psu {
+            self.remember_psu_setpoints();
+        }
+        self.scpi_is_psu = false;
+        self.psu = PsuLive::default();
+        self.psu_edit = PsuEditMask::default();
+        self.psu_plot_v = 0.0;
+        self.psu_plot_i = 0.0;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.victor_86bcd_rx = None;
@@ -780,6 +978,8 @@ impl MyApp {
         self.macro_recording = false;
         self.curr_meas = f64::NAN; // Reset measurement
         self.values.clear(); // Clear graph data
+        self.psu_curr_trace.clear();
+        self.psu_power_trace.clear();
         self.hist_values.clear(); // Clear histogram data
         self.meas_count = 0; // Reset measurement counter
     }

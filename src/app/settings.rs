@@ -153,13 +153,32 @@ impl super::MyApp {
                         }
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
-                                ui.label("Graph line color:");
+                                ui.label("Graph line color (primary):");
                                 color_picker_color32(
                                     ui,
                                     &mut self.graph_line_color,
                                     egui::color_picker::Alpha::Opaque,
                                 );
                             });
+                            ui.vertical(|ui| {
+                                ui.label("Graph line color (secondary):");
+                                color_picker_color32(
+                                    ui,
+                                    &mut self.graph_line_color_secondary,
+                                    egui::color_picker::Alpha::Opaque,
+                                );
+                            });
+                            ui.vertical(|ui| {
+                                ui.label("Graph line color (tertiary):");
+                                color_picker_color32(
+                                    ui,
+                                    &mut self.graph_line_color_tertiary,
+                                    egui::color_picker::Alpha::Opaque,
+                                );
+                            });
+                        });
+                        ui.label("In PSU mode: primary = voltage, secondary = current, tertiary = power.");
+                        ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.label("Histogram bar color:");
                                 color_picker_color32(

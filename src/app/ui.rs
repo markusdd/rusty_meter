@@ -11,6 +11,58 @@ use crate::multimeter::{GenScpi, MeterMode};
 const MODE_BUTTON_SIZE: Vec2 = Vec2 { x: 70.0, y: 20.0 };
 /// Wrap main-window macro buttons after this many mode-grid columns.
 const MACRO_GRID_COLUMNS: usize = 4;
+/// PSU V/I sliders: ~100 mA per pixel at 20 A full scale.
+const PSU_SLIDER_WIDTH: f32 = 250.0;
+/// Rail click/drag grid. A 60 V / 250 px bar is ~0.25 V/pixel, so some tenths
+/// are skipped. Typing in the number box is still millivolts.
+const PSU_RAIL_STEP: f64 = 0.1;
+
+/// Rail snaps to `PSU_RAIL_STEP` from the pointer (no extra drag state).
+/// `SliderClamping::Edits` so a typed milli value is not rounded on the next frame.
+fn psu_setpoint_row(ui: &mut egui::Ui, val: &mut f32, max: f32, label: &str) -> egui::Response {
+    ui.horizontal(|ui| {
+        let rail = ui.add(
+            egui::Slider::new(val, 0.0..=max)
+                .show_value(false)
+                .step_by(PSU_RAIL_STEP)
+                .smart_aim(false)
+                .clamping(SliderClamping::Edits),
+        );
+        let num = ui.add(
+            egui::DragValue::new(val)
+                .range(0.0..=max)
+                .speed(PSU_RAIL_STEP)
+                .min_decimals(3)
+                .fixed_decimals(3),
+        );
+        ui.label(label);
+        rail.union(num)
+    })
+    .inner
+}
+
+fn psu_drag_value_min_x(ui: &egui::Ui, max: f32, decimals: usize) -> f32 {
+    let sample = format!("{max:.decimals$}");
+    let font_id = ui.style().drag_value_text_style.resolve(ui.style());
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(sample, font_id, egui::Color32::WHITE)
+        .size()
+        .x;
+    text_w + 2.0 * ui.spacing().button_padding.x
+}
+
+fn psu_slider_commit(resp: &egui::Response, editing: &mut bool) -> bool {
+    if resp.has_focus() || resp.dragged() {
+        *editing = true;
+    }
+    if *editing && (resp.drag_stopped() || resp.lost_focus()) {
+        *editing = false;
+        true
+    } else {
+        false
+    }
+}
 
 /// Outer width of two mode buttons plus the gap between them.
 fn two_mode_button_span(ui: &egui::Ui) -> f32 {
@@ -51,6 +103,7 @@ struct PlotTabViewer<'a> {
     graph_update_interval_max: u64,
     hist_mem_depth_max: usize,
     curr_unit: &'a str,
+    psu_graph: Option<super::graph::PsuGraph<'a>>,
 }
 
 impl TabViewer for PlotTabViewer<'_> {
@@ -69,18 +122,33 @@ impl TabViewer for PlotTabViewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
-            PlotTab::Graph => super::graph::show_line_graph(
-                ui,
-                self.values,
-                *self.reverse_graph,
-                self.graph_line_color,
-                self.mem_depth,
-                self.graph_update_interval_ms,
-                self.reverse_graph,
-                self.mem_depth_max,
-                self.graph_update_interval_max,
-                self.curr_unit,
-            ),
+            PlotTab::Graph => {
+                if let Some(data) = self.psu_graph {
+                    super::graph::show_psu_graphs(
+                        ui,
+                        data,
+                        *self.reverse_graph,
+                        self.mem_depth,
+                        self.graph_update_interval_ms,
+                        self.reverse_graph,
+                        self.mem_depth_max,
+                        self.graph_update_interval_max,
+                    );
+                } else {
+                    super::graph::show_line_graph(
+                        ui,
+                        self.values,
+                        *self.reverse_graph,
+                        self.graph_line_color,
+                        self.mem_depth,
+                        self.graph_update_interval_ms,
+                        self.reverse_graph,
+                        self.mem_depth_max,
+                        self.graph_update_interval_max,
+                        self.curr_unit,
+                    );
+                }
+            }
             PlotTab::Histogram => super::graph::show_histogram(
                 ui,
                 self.hist_values,
@@ -164,7 +232,7 @@ impl super::MyApp {
             .collect()
     }
 
-    fn show_macro_buttons(&mut self, ui: &mut egui::Ui) {
+    fn show_macro_buttons(&mut self, ui: &mut egui::Ui, separator: bool) {
         let buttons = self.matching_button_macros();
         if buttons.is_empty() {
             return;
@@ -188,7 +256,9 @@ impl super::MyApp {
         }
         ui.scope(|ui| {
             ui.set_width(width);
-            ui.separator();
+            if separator {
+                ui.separator();
+            }
             for row in rows {
                 ui.horizontal(|ui| {
                     for (id, name, two_wide) in row {
@@ -232,11 +302,185 @@ impl super::MyApp {
         });
     }
 
+    fn show_psu_panel(&mut self, ui: &mut egui::Ui) {
+        let frame = |fill: egui::Color32| egui::Frame {
+            inner_margin: 12.0.into(),
+            outer_margin: 24.0.into(),
+            corner_radius: 5.0.into(),
+            shadow: epaint::Shadow {
+                offset: [8, 12],
+                blur: 16,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(180),
+            },
+            fill,
+            stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+        };
+        let model = self.psu_model;
+        let fault = self.psu.ovp_fault || self.psu.ocp_fault || self.psu.otp_fault;
+        ui.horizontal(|ui| {
+            frame(self.box_background_color).show(ui, |ui| {
+                ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        let num_font = FontId {
+                            size: 28.0,
+                            family: FontFamily::Name("B612Mono-Bold".into()),
+                        };
+                        let unit_font = FontId {
+                            size: 14.0,
+                            family: FontFamily::Name("B612Mono-Bold".into()),
+                        };
+                        let col_w = ui
+                            .painter()
+                            .layout_no_wrap(
+                                "00000.000".into(),
+                                num_font.clone(),
+                                egui::Color32::WHITE,
+                            )
+                            .size()
+                            .x;
+                        for (val, unit, color) in [
+                            (self.psu.meas_v, "V", self.graph_line_color),
+                            (self.psu.meas_i, "A", self.graph_line_color_secondary),
+                            (self.psu.meas_p, "W", self.graph_line_color_tertiary),
+                        ] {
+                            let (num, u) = crate::psu::format_qty(val, unit);
+                            ui.allocate_ui_with_layout(
+                                Vec2 { x: col_w, y: 48.0 },
+                                egui::Layout::top_down(egui::Align::RIGHT),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(num)
+                                            .color(color)
+                                            .font(num_font.clone()),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(u).color(color).font(unit_font.clone()),
+                                    );
+                                },
+                            );
+                            ui.add_space(12.0);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let fault_red = egui::Color32::from_rgb(220, 40, 40);
+                        let (label, color) = if fault {
+                            (
+                                format!(
+                                    "FAULT{}",
+                                    match (
+                                        self.psu.ovp_fault,
+                                        self.psu.ocp_fault,
+                                        self.psu.otp_fault
+                                    ) {
+                                        (true, _, _) => " OVP",
+                                        (_, true, _) => " OCP",
+                                        _ => " OTP",
+                                    }
+                                ),
+                                fault_red,
+                            )
+                        } else {
+                            let c = match self.psu.run {
+                                crate::psu::PsuRunMode::Cv => self.graph_line_color,
+                                crate::psu::PsuRunMode::Cc => self.graph_line_color_secondary,
+                                crate::psu::PsuRunMode::Standby => egui::Color32::GRAY,
+                                crate::psu::PsuRunMode::Fault => fault_red,
+                            };
+                            (self.psu.run.label().to_owned(), c)
+                        };
+                        ui.colored_label(color, label);
+                        ui.label(model.display_name());
+                    });
+                });
+            });
+
+            let ovp_max = model.ovp_max().max(self.psu.ovp);
+            let ocp_max = model.ocp_max().max(self.psu.ocp);
+            let num_max = model.v_max.max(model.i_max).max(ovp_max).max(ocp_max);
+            let drag_w = psu_drag_value_min_x(ui, num_max, 3);
+
+            frame(self.box_background_color).show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().slider_width = PSU_SLIDER_WIDTH;
+                    ui.spacing_mut().interact_size.x = drag_w;
+                    ui.label("Setpoints");
+                    let mut v = self.psu.set_v;
+                    let v_slider = psu_setpoint_row(ui, &mut v, model.v_max, "V");
+                    if v_slider.changed() {
+                        self.psu.set_v = v;
+                        if v_slider.dragged() || v_slider.drag_started() {
+                            self.psu_plot_v = v;
+                        }
+                    }
+                    if psu_slider_commit(&v_slider, &mut self.psu_edit.set_v) {
+                        self.psu_plot_v = self.psu.set_v;
+                        self.queue_scpi(crate::psu::set_volt(self.psu.set_v), true);
+                    }
+                    let mut i = self.psu.set_i;
+                    let i_slider = psu_setpoint_row(ui, &mut i, model.i_max, "A");
+                    if i_slider.changed() {
+                        self.psu.set_i = i;
+                        if i_slider.dragged() || i_slider.drag_started() {
+                            self.psu_plot_i = i;
+                        }
+                    }
+                    if psu_slider_commit(&i_slider, &mut self.psu_edit.set_i) {
+                        self.psu_plot_i = self.psu.set_i;
+                        self.queue_scpi(crate::psu::set_curr(self.psu.set_i), true);
+                    }
+                    let mut ovp = self.psu.ovp;
+                    let ovp_sl = psu_setpoint_row(ui, &mut ovp, ovp_max, "OVP");
+                    if ovp_sl.changed() {
+                        self.psu.ovp = ovp;
+                    }
+                    if psu_slider_commit(&ovp_sl, &mut self.psu_edit.ovp) {
+                        self.queue_scpi(crate::psu::set_ovp(self.psu.ovp), true);
+                    }
+                    let mut ocp = self.psu.ocp;
+                    let ocp_sl = psu_setpoint_row(ui, &mut ocp, ocp_max, "OCP");
+                    if ocp_sl.changed() {
+                        self.psu.ocp = ocp;
+                    }
+                    if psu_slider_commit(&ocp_sl, &mut self.psu_edit.ocp) {
+                        self.queue_scpi(crate::psu::set_ocp(self.psu.ocp), true);
+                    }
+                    let on = self.psu.output_on;
+                    let out_label = if on { "OUTPUT ON" } else { "OUTPUT OFF" };
+                    let out_btn = egui::Button::new(out_label)
+                        .selected(on)
+                        .min_size(Vec2 { x: 140.0, y: 28.0 });
+                    if ui.add(out_btn).clicked() {
+                        self.psu.output_on = !on;
+                        self.queue_scpi(crate::psu::set_output(self.psu.output_on), true);
+                    }
+                });
+            });
+
+            if !self.matching_button_macros().is_empty() {
+                let macros_w = MACRO_GRID_COLUMNS as f32 * MODE_BUTTON_SIZE.x
+                    + (MACRO_GRID_COLUMNS - 1) as f32 * ui.spacing().item_spacing.x;
+                frame(self.box_background_color).show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_min_width(macros_w);
+                        ui.set_max_width(macros_w);
+                        ui.label("Macros");
+                        self.show_macro_buttons(ui, false);
+                    });
+                });
+            }
+        });
+    }
+
     /// Called by the framework to save state before shutdown.
     pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // Save recording data if recording is active
         if self.recording_active {
             self.save_recording_data();
+        }
+        if self.scpi_is_psu {
+            self.remember_psu_setpoints();
         }
         eframe::set_value(storage, eframe::APP_KEY, self);
     }
@@ -292,6 +536,8 @@ impl super::MyApp {
                         self.metermode = update.mode;
                         self.curr_unit = update.unit;
                         self.values = VecDeque::with_capacity(self.mem_depth);
+                        self.psu_curr_trace = VecDeque::with_capacity(self.mem_depth);
+                        self.psu_power_trace = VecDeque::with_capacity(self.mem_depth);
                         self.hist_values = VecDeque::with_capacity(self.hist_mem_depth);
                         self.rangecmd = None;
                         self.curr_range = 0;
@@ -361,17 +607,30 @@ impl super::MyApp {
             self.apply_meter_status(status);
         }
 
+        // Drain every pending PSU update. Sample and Status touch different
+        // fields, so both kinds must be applied; within each kind only the last
+        // value remains (graph/histogram also read curr_meas once per frame).
+        let mut psu_updates = Vec::new();
+        if let Some(ref mut rx) = self.psu_rx {
+            while let Ok(update) = rx.try_recv() {
+                psu_updates.push(update);
+            }
+        }
+        for update in psu_updates {
+            self.apply_psu_update(update);
+        }
+
         // Handle graph and histogram updates and recording based on the configured interval
         let current_time = ui.ctx().input(|i| i.time); // Get current time in seconds
         let graph_interval = self.graph_update_interval_ms as f64 / 1000.0; // Convert ms to seconds
         if current_time - self.last_graph_update >= graph_interval {
             // Skip non-finite samples — histogram binning panics on Inf/NaN.
             if self.curr_meas.is_finite() {
-                self.values.push_back(self.curr_meas);
-                self.update_histogram(self.curr_meas); // Update histogram with new measurement
-                while self.values.len() > self.mem_depth {
-                    self.values.pop_front();
+                if !self.scpi_is_psu {
+                    self.values.push_back(self.curr_meas);
                 }
+                self.update_histogram(self.curr_meas); // Update histogram with new measurement
+                self.trim_graph_traces();
                 // Record measurement for fixed interval mode
                 if self.recording_active
                     && matches!(self.recording_mode, super::RecordingMode::FixedInterval)
@@ -689,298 +948,307 @@ impl super::MyApp {
                 });
             }
 
-            ui.horizontal(|ui| {
-                // Determine if the background and shadow should be dark red based on mode and threshold
-                let is_below_threshold = match self.metermode {
-                    MeterMode::Cont => {
-                        self.curr_meas.is_finite() && self.curr_meas <= self.cont_threshold as f64
-                    }
-                    MeterMode::Diod => {
-                        self.curr_meas.is_finite() && self.curr_meas <= self.diod_threshold as f64
-                    }
-                    _ => false,
-                };
-                let background_color = if is_below_threshold {
-                    egui::Color32::from_rgb(139, 0, 0) // Dark red for threshold condition
-                } else {
-                    self.box_background_color // Use custom background color
-                };
-                let shadow_color = if is_below_threshold {
-                    // don't do this for now egui::Color32::from_rgba_unmultiplied(139, 0, 0, 180) // Dark red shadow with alpha
-                    egui::Color32::from_black_alpha(180) // Default black shadow
-                } else {
-                    egui::Color32::from_black_alpha(180) // Default black shadow
-                };
+            if self.scpi_is_psu {
+                self.show_psu_panel(ui);
+            } else {
+                ui.horizontal(|ui| {
+                    // Determine if the background and shadow should be dark red based on mode and threshold
+                    let is_below_threshold = match self.metermode {
+                        MeterMode::Cont => {
+                            self.curr_meas.is_finite()
+                                && self.curr_meas <= self.cont_threshold as f64
+                        }
+                        MeterMode::Diod => {
+                            self.curr_meas.is_finite()
+                                && self.curr_meas <= self.diod_threshold as f64
+                        }
+                        _ => false,
+                    };
+                    let background_color = if is_below_threshold {
+                        egui::Color32::from_rgb(139, 0, 0) // Dark red for threshold condition
+                    } else {
+                        self.box_background_color // Use custom background color
+                    };
+                    let shadow_color = if is_below_threshold {
+                        // don't do this for now egui::Color32::from_rgba_unmultiplied(139, 0, 0, 180) // Dark red shadow with alpha
+                        egui::Color32::from_black_alpha(180) // Default black shadow
+                    } else {
+                        egui::Color32::from_black_alpha(180) // Default black shadow
+                    };
 
-                let meter_frame = egui::Frame {
-                    inner_margin: 12.0.into(),
-                    outer_margin: 24.0.into(),
-                    corner_radius: 5.0.into(),
-                    shadow: epaint::Shadow {
-                        offset: [8, 12],
-                        blur: 16,
-                        spread: 0,
-                        color: shadow_color,
-                    },
-                    fill: background_color,
-                    stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
-                };
-                meter_frame.show(ui, |ui| {
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    ui.allocate_ui_with_layout(
-                        Vec2 { x: 400.0, y: 300.0 },
-                        egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
-                        |ui| {
-                            #[cfg(not(target_arch = "wasm32"))]
-                            let (formatted_value, display_unit) = {
-                                // 86B/C/D only: glass text from segment decode.
-                                let lcd_override = if self.connection_type
-                                    == super::ConnectionType::Victor86bcdSerial
-                                    && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE
-                                    && !self.victor_lcd_display.is_empty()
-                                {
-                                    Some((
-                                        self.victor_lcd_display.as_str(),
-                                        self.curr_unit.as_str(),
-                                    ))
-                                } else {
-                                    None
-                                };
-                                // 86B/C/D: lcd_override. HID: no auto-scale.
-                                // SCPI: format_measurement(auto_scale).
-                                // 86E: ON → SI + magnitude auto; OFF → decoder unit (meter range).
-                                let auto_scale = match self.connection_type {
-                                    super::ConnectionType::Victor86bcdSerial
-                                    | super::ConnectionType::VictorHid => false,
-                                    _ => self.auto_scale_units(&self.metermode),
-                                };
-                                let (formatted_value, mut display_unit) = {
-                                    let use_meter_unit = self.connection_type
-                                        == super::ConnectionType::Victor86eSerial
-                                        && !auto_scale
-                                        && !self.curr_unit.is_empty()
-                                        && self.curr_meas.is_finite()
-                                        && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE;
-
-                                    if use_meter_unit {
-                                        // What the meter “sends” as unit for this range.
-                                        let scaled = crate::victor_es519xx::si_to_meter_unit(
-                                            self.curr_meas,
-                                            &self.curr_unit,
-                                        );
-                                        let (num, _) = format_measurement(
-                                            scaled,
-                                            10,
-                                            1_000_000.0,
-                                            0.000001,
-                                            &self.metermode,
-                                            false,
-                                            None,
-                                        );
-                                        (num, self.curr_unit.clone())
-                                    } else {
-                                        format_measurement(
-                                            self.curr_meas,
-                                            10,
-                                            1_000_000.0,
-                                            0.000001,
-                                            &self.metermode,
-                                            auto_scale,
-                                            lcd_override,
-                                        )
-                                    }
-                                };
-                                // Temp unit from decoder (°C / °F); formatter defaults to °C.
-                                if self.metermode == MeterMode::Temp && !self.curr_unit.is_empty() {
-                                    display_unit = self.curr_unit.clone();
-                                }
-                                (formatted_value, display_unit)
-                            };
-                            #[cfg(target_arch = "wasm32")]
-                            let (formatted_value, display_unit) = format_measurement(
-                                self.curr_meas,
-                                10,
-                                1_000_000.0,
-                                0.000001,
-                                &self.metermode,
-                                self.auto_scale_units(&self.metermode),
-                                None,
-                            );
-                            ui.label(
-                                egui::RichText::new(formatted_value)
-                                    .color(self.measurement_font_color)
-                                    .font(FontId {
-                                        size: 60.0,
-                                        family: FontFamily::Name("B612Mono-Bold".into()),
-                                    }),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("{:>10}", display_unit))
-                                    .color(self.measurement_font_color)
-                                    .font(FontId {
-                                        size: 20.0,
-                                        family: FontFamily::Name("B612Mono-Bold".into()),
-                                    }),
-                            );
+                    let meter_frame = egui::Frame {
+                        inner_margin: 12.0.into(),
+                        outer_margin: 24.0.into(),
+                        corner_radius: 5.0.into(),
+                        shadow: epaint::Shadow {
+                            offset: [8, 12],
+                            blur: 16,
+                            spread: 0,
+                            color: shadow_color,
                         },
-                    );
-                });
+                        fill: background_color,
+                        stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                    };
+                    meter_frame.show(ui, |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        ui.allocate_ui_with_layout(
+                            Vec2 { x: 400.0, y: 300.0 },
+                            egui::Layout::top_down(egui::Align::RIGHT).with_cross_justify(false),
+                            |ui| {
+                                #[cfg(not(target_arch = "wasm32"))]
+                                let (formatted_value, display_unit) = {
+                                    // 86B/C/D only: glass text from segment decode.
+                                    let lcd_override = if self.connection_type
+                                        == super::ConnectionType::Victor86bcdSerial
+                                        && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE
+                                        && !self.victor_lcd_display.is_empty()
+                                    {
+                                        Some((
+                                            self.victor_lcd_display.as_str(),
+                                            self.curr_unit.as_str(),
+                                        ))
+                                    } else {
+                                        None
+                                    };
+                                    // 86B/C/D: lcd_override. HID: no auto-scale.
+                                    // SCPI: format_measurement(auto_scale).
+                                    // 86E: ON → SI + magnitude auto; OFF → decoder unit (meter range).
+                                    let auto_scale = match self.connection_type {
+                                        super::ConnectionType::Victor86bcdSerial
+                                        | super::ConnectionType::VictorHid => false,
+                                        _ => self.auto_scale_units(&self.metermode),
+                                    };
+                                    let (formatted_value, mut display_unit) = {
+                                        let use_meter_unit = self.connection_type
+                                            == super::ConnectionType::Victor86eSerial
+                                            && !auto_scale
+                                            && !self.curr_unit.is_empty()
+                                            && self.curr_meas.is_finite()
+                                            && self.curr_meas
+                                                != crate::helpers::METER_OVERLOAD_VALUE;
 
-                let control_frame = egui::Frame {
-                    inner_margin: 12.0.into(),
-                    outer_margin: 24.0.into(),
-                    corner_radius: 5.0.into(),
-                    shadow: epaint::Shadow {
-                        offset: [8, 12],
-                        blur: 16,
-                        spread: 0,
-                        color: egui::Color32::from_black_alpha(180),
-                    },
-                    fill: self.box_background_color,
-                    stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
-                };
-                control_frame.show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        if self.is_read_only() {
-                            ui.label(
-                                egui::RichText::new("Read only — change mode on the meter")
-                                    .italics(),
-                            );
-                        }
-                        let read_only = self.is_read_only();
-                        ui.add_enabled_ui(!read_only, |ui| {
-                            const ROWS: [&[MeterMode]; 3] = [
-                                &[
-                                    MeterMode::Vdc,
-                                    MeterMode::Vac,
-                                    MeterMode::Adc,
-                                    MeterMode::Aac,
-                                ],
-                                &[
-                                    MeterMode::Res,
-                                    MeterMode::Cap,
-                                    MeterMode::Freq,
-                                    MeterMode::Per,
-                                    MeterMode::Duty,
-                                ],
-                                &[MeterMode::Diod, MeterMode::Cont, MeterMode::Temp],
-                            ];
-                            for row in ROWS {
-                                ui.horizontal(|ui| {
-                                    for &mode in row {
-                                        if !self.mode_visible_in_ui(mode) {
-                                            continue;
+                                        if use_meter_unit {
+                                            // What the meter “sends” as unit for this range.
+                                            let scaled = crate::victor_es519xx::si_to_meter_unit(
+                                                self.curr_meas,
+                                                &self.curr_unit,
+                                            );
+                                            let (num, _) = format_measurement(
+                                                scaled,
+                                                10,
+                                                1_000_000.0,
+                                                0.000001,
+                                                &self.metermode,
+                                                false,
+                                                None,
+                                            );
+                                            (num, self.curr_unit.clone())
+                                        } else {
+                                            format_measurement(
+                                                self.curr_meas,
+                                                10,
+                                                1_000_000.0,
+                                                0.000001,
+                                                &self.metermode,
+                                                auto_scale,
+                                                lcd_override,
+                                            )
                                         }
-                                        let btn = egui::Button::new(mode.button_label())
-                                            .selected(self.metermode == mode)
-                                            .min_size(MODE_BUTTON_SIZE);
-                                        if ui.add(btn).clicked() {
-                                            self.set_mode(mode);
-                                        }
+                                    };
+                                    // Temp unit from decoder (°C / °F); formatter defaults to °C.
+                                    if self.metermode == MeterMode::Temp
+                                        && !self.curr_unit.is_empty()
+                                    {
+                                        display_unit = self.curr_unit.clone();
                                     }
-                                });
-                            }
-                        }); // add_enabled_ui
-                        if self.scpi_macros_on_main() {
-                            self.show_macro_buttons(ui);
-                        }
-                    });
-                });
-
-                let options_frame = egui::Frame {
-                    inner_margin: 12.0.into(),
-                    outer_margin: 24.0.into(),
-                    corner_radius: 5.0.into(),
-                    shadow: epaint::Shadow {
-                        offset: [8, 12],
-                        blur: 16,
-                        spread: 0,
-                        color: egui::Color32::from_black_alpha(180),
-                    },
-                    fill: self.box_background_color,
-                    stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
-                };
-                options_frame.show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        if self.is_read_only() {
-                            ui.label(egui::RichText::new("Range controlled on device").italics());
-                            self.show_cont_diod_threshold_sliders(ui, false);
-                        } else {
-                            let ratebox = egui::ComboBox::from_label("Sampling Rate").show_index(
-                                ui,
-                                &mut self.curr_rate,
-                                self.ratecmd.len(),
-                                |i| self.ratecmd.get_opt(i).0,
-                            );
-                            if ratebox.changed() {
-                                self.confstring = self
-                                    .ratecmd
-                                    .gen_scpi(self.ratecmd.get_opt(self.curr_rate).0);
-                                self.queue_scpi(self.confstring.clone(), true);
-                                if self.value_debug {
-                                    println!("Selected Rate changed: {}", self.confstring);
-                                }
-                            }
-                            if let Some(rangecmd) = &self.rangecmd {
-                                let rangebox = egui::ComboBox::from_label("Range").show_index(
-                                    ui,
-                                    &mut self.curr_range,
-                                    rangecmd.len(),
-                                    |i| rangecmd.get_opt(i).0,
+                                    (formatted_value, display_unit)
+                                };
+                                #[cfg(target_arch = "wasm32")]
+                                let (formatted_value, display_unit) = format_measurement(
+                                    self.curr_meas,
+                                    10,
+                                    1_000_000.0,
+                                    0.000001,
+                                    &self.metermode,
+                                    self.auto_scale_units(&self.metermode),
+                                    None,
                                 );
-                                if rangebox.changed() {
-                                    self.meter_auto_range = self.curr_range == 0;
-                                    self.confstring =
-                                        rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
+                                ui.label(
+                                    egui::RichText::new(formatted_value)
+                                        .color(self.measurement_font_color)
+                                        .font(FontId {
+                                            size: 60.0,
+                                            family: FontFamily::Name("B612Mono-Bold".into()),
+                                        }),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("{:>10}", display_unit))
+                                        .color(self.measurement_font_color)
+                                        .font(FontId {
+                                            size: 20.0,
+                                            family: FontFamily::Name("B612Mono-Bold".into()),
+                                        }),
+                                );
+                            },
+                        );
+                    });
+
+                    let control_frame = egui::Frame {
+                        inner_margin: 12.0.into(),
+                        outer_margin: 24.0.into(),
+                        corner_radius: 5.0.into(),
+                        shadow: epaint::Shadow {
+                            offset: [8, 12],
+                            blur: 16,
+                            spread: 0,
+                            color: egui::Color32::from_black_alpha(180),
+                        },
+                        fill: self.box_background_color,
+                        stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                    };
+                    control_frame.show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            if self.is_read_only() {
+                                ui.label(
+                                    egui::RichText::new("Read only — change mode on the meter")
+                                        .italics(),
+                                );
+                            }
+                            let read_only = self.is_read_only();
+                            ui.add_enabled_ui(!read_only, |ui| {
+                                const ROWS: [&[MeterMode]; 3] = [
+                                    &[
+                                        MeterMode::Vdc,
+                                        MeterMode::Vac,
+                                        MeterMode::Adc,
+                                        MeterMode::Aac,
+                                    ],
+                                    &[
+                                        MeterMode::Res,
+                                        MeterMode::Cap,
+                                        MeterMode::Freq,
+                                        MeterMode::Per,
+                                        MeterMode::Duty,
+                                    ],
+                                    &[MeterMode::Diod, MeterMode::Cont, MeterMode::Temp],
+                                ];
+                                for row in ROWS {
+                                    ui.horizontal(|ui| {
+                                        for &mode in row {
+                                            if !self.mode_visible_in_ui(mode) {
+                                                continue;
+                                            }
+                                            let btn = egui::Button::new(mode.button_label())
+                                                .selected(self.metermode == mode)
+                                                .min_size(MODE_BUTTON_SIZE);
+                                            if ui.add(btn).clicked() {
+                                                self.set_mode(mode);
+                                            }
+                                        }
+                                    });
+                                }
+                            }); // add_enabled_ui
+                            if self.scpi_macros_on_main() {
+                                self.show_macro_buttons(ui, true);
+                            }
+                        });
+                    });
+
+                    let options_frame = egui::Frame {
+                        inner_margin: 12.0.into(),
+                        outer_margin: 24.0.into(),
+                        corner_radius: 5.0.into(),
+                        shadow: epaint::Shadow {
+                            offset: [8, 12],
+                            blur: 16,
+                            spread: 0,
+                            color: egui::Color32::from_black_alpha(180),
+                        },
+                        fill: self.box_background_color,
+                        stroke: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                    };
+                    options_frame.show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            if self.is_read_only() {
+                                ui.label(
+                                    egui::RichText::new("Range controlled on device").italics(),
+                                );
+                                self.show_cont_diod_threshold_sliders(ui, false);
+                            } else {
+                                let ratebox = egui::ComboBox::from_label("Sampling Rate")
+                                    .show_index(ui, &mut self.curr_rate, self.ratecmd.len(), |i| {
+                                        self.ratecmd.get_opt(i).0
+                                    });
+                                if ratebox.changed() {
+                                    self.confstring = self
+                                        .ratecmd
+                                        .gen_scpi(self.ratecmd.get_opt(self.curr_rate).0);
                                     self.queue_scpi(self.confstring.clone(), true);
                                     if self.value_debug {
-                                        println!("Selected Range changed: {}", self.confstring);
+                                        println!("Selected Rate changed: {}", self.confstring);
                                     }
                                 }
-                            }
-                            // Beeper + thresholds for SCPI CONT/DIOD
-                            if self.metermode == MeterMode::Cont
-                                || self.metermode == MeterMode::Diod
-                            {
-                                let mut beeper = self.beeper_enabled;
-                                if ui.checkbox(&mut beeper, "Beeper").changed() {
-                                    self.beeper_enabled = beeper;
-                                    self.queue_scpi(
-                                        if beeper {
-                                            "SYST:BEEP:STATe ON\n"
-                                        } else {
-                                            "SYST:BEEP:STATe OFF\n"
-                                        },
-                                        true,
+                                if let Some(rangecmd) = &self.rangecmd {
+                                    let rangebox = egui::ComboBox::from_label("Range").show_index(
+                                        ui,
+                                        &mut self.curr_range,
+                                        rangecmd.len(),
+                                        |i| rangecmd.get_opt(i).0,
                                     );
+                                    if rangebox.changed() {
+                                        self.meter_auto_range = self.curr_range == 0;
+                                        self.confstring =
+                                            rangecmd.gen_scpi(rangecmd.get_opt(self.curr_range).0);
+                                        self.queue_scpi(self.confstring.clone(), true);
+                                        if self.value_debug {
+                                            println!("Selected Range changed: {}", self.confstring);
+                                        }
+                                    }
                                 }
-                                self.show_cont_diod_threshold_sliders(ui, true);
+                                // Beeper + thresholds for SCPI CONT/DIOD
+                                if self.metermode == MeterMode::Cont
+                                    || self.metermode == MeterMode::Diod
+                                {
+                                    let mut beeper = self.beeper_enabled;
+                                    if ui.checkbox(&mut beeper, "Beeper").changed() {
+                                        self.beeper_enabled = beeper;
+                                        self.queue_scpi(
+                                            if beeper {
+                                                "SYST:BEEP:STATe ON\n"
+                                            } else {
+                                                "SYST:BEEP:STATe OFF\n"
+                                            },
+                                            true,
+                                        );
+                                    }
+                                    self.show_cont_diod_threshold_sliders(ui, true);
+                                }
                             }
-                        }
 
-                        // SI-based meters (SCPI, 86E): same auto-scale control.
-                        // LCD/HID Victors use fixed glass text / no magnitude auto-scale.
-                        let show_auto_scale = match self.connection_type {
-                            #[cfg(not(target_arch = "wasm32"))]
-                            super::ConnectionType::Victor86bcdSerial
-                            | super::ConnectionType::VictorHid => false,
-                            _ => true,
-                        };
-                        if show_auto_scale {
-                            let mut auto_scale = self.auto_scale_units(&self.metermode);
-                            if ui
-                                .checkbox(&mut auto_scale, "Auto-scale units")
-                                .on_hover_text(
-                                    "Auto scale values and show prefixed units like mV/mΩ/kΩ",
-                                )
-                                .changed()
-                            {
-                                self.set_auto_scale_units(self.metermode, auto_scale);
+                            // SI-based meters (SCPI, 86E): same auto-scale control.
+                            // LCD/HID Victors use fixed glass text / no magnitude auto-scale.
+                            let show_auto_scale = match self.connection_type {
+                                #[cfg(not(target_arch = "wasm32"))]
+                                super::ConnectionType::Victor86bcdSerial
+                                | super::ConnectionType::VictorHid => false,
+                                _ => true,
+                            };
+                            if show_auto_scale {
+                                let mut auto_scale = self.auto_scale_units(&self.metermode);
+                                if ui
+                                    .checkbox(&mut auto_scale, "Auto-scale units")
+                                    .on_hover_text(
+                                        "Auto scale values and show prefixed units like mV/mΩ/kΩ",
+                                    )
+                                    .changed()
+                                {
+                                    self.set_auto_scale_units(self.metermode, auto_scale);
+                                }
                             }
-                        }
+                        });
                     });
                 });
-            });
+            }
 
             ui.separator();
 
@@ -1006,6 +1274,17 @@ impl super::MyApp {
                     graph_update_interval_max: self.graph_update_interval_max,
                     hist_mem_depth_max: self.hist_mem_depth_max,
                     curr_unit: &self.curr_unit,
+                    psu_graph: self.scpi_is_psu.then_some(super::graph::PsuGraph {
+                        volt: &self.values,
+                        curr: &self.psu_curr_trace,
+                        power: &self.psu_power_trace,
+                        set_v: f64::from(self.psu_plot_v),
+                        set_i: f64::from(self.psu_plot_i),
+                        set_p: f64::from(self.psu_plot_v) * f64::from(self.psu_plot_i),
+                        color_v: self.graph_line_color,
+                        color_i: self.graph_line_color_secondary,
+                        color_p: self.graph_line_color_tertiary,
+                    }),
                 };
                 DockArea::new(dock_state)
                     .style(Style::from_egui(ui.style()))

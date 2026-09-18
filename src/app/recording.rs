@@ -196,62 +196,55 @@ impl super::MyApp {
 
                             // Data table
                             ui.separator();
-                            TableBuilder::new(ui)
+                            let (ch_names, st_names) = recording_column_names(&self.recording_data);
+                            let legacy = is_legacy_layout(&self.recording_data);
+                            let extra = if legacy {
+                                2
+                            } else {
+                                ch_names.len() + st_names.len()
+                            };
+                            let mut table = TableBuilder::new(ui)
                                 .striped(true)
                                 .resizable(true)
                                 .vscroll(true)
                                 .stick_to_bottom(true)
                                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                .column(Column::initial(100.0).at_least(50.0))
-                                .column(Column::initial(200.0).at_least(100.0))
-                                .column(Column::initial(100.0).at_least(50.0))
-                                .column(Column::initial(100.0).at_least(50.0))
+                                .column(Column::initial(80.0).at_least(50.0))
+                                .column(Column::initial(200.0).at_least(100.0));
+                            for _ in 0..extra {
+                                table = table.column(Column::initial(90.0).at_least(50.0));
+                            }
+                            let headers = preview_headers(legacy, &ch_names, &st_names);
+                            table
                                 .header(20.0, |mut header| {
-                                    header.col(|ui| {
-                                        ui.label(
-                                            RichText::new("Index").font(FontId::proportional(16.0)),
-                                        );
-                                    });
-                                    header.col(|ui| {
-                                        ui.label(
-                                            RichText::new("Timestamp")
-                                                .font(FontId::proportional(16.0)),
-                                        );
-                                    });
-                                    header.col(|ui| {
-                                        ui.label(
-                                            RichText::new("Unit").font(FontId::proportional(16.0)),
-                                        );
-                                    });
-                                    header.col(|ui| {
-                                        ui.label(
-                                            RichText::new("Value").font(FontId::proportional(16.0)),
-                                        );
-                                    });
+                                    for title in &headers {
+                                        header.col(|ui| {
+                                            ui.label(
+                                                RichText::new(title.as_str())
+                                                    .font(FontId::proportional(16.0)),
+                                            );
+                                        });
+                                    }
                                 })
                                 .body(|mut body| {
                                     for record in self.recording_data.iter() {
+                                        let ts = match self.recording_timestamp_format {
+                                            super::TimestampFormat::Rfc3339 => {
+                                                record.timestamp.to_rfc3339()
+                                            }
+                                            super::TimestampFormat::Unix => {
+                                                record.timestamp.timestamp().to_string()
+                                            }
+                                        };
+                                        let cells = preview_cells(
+                                            record, legacy, &ch_names, &st_names, &ts,
+                                        );
                                         body.row(20.0, |mut row| {
-                                            row.col(|ui| {
-                                                ui.label(format!("{}", record.index));
-                                            });
-                                            row.col(|ui| match self.recording_timestamp_format {
-                                                super::TimestampFormat::Rfc3339 => {
-                                                    ui.label(record.timestamp.to_rfc3339());
-                                                }
-                                                super::TimestampFormat::Unix => {
-                                                    ui.label(format!(
-                                                        "{}",
-                                                        record.timestamp.timestamp()
-                                                    ));
-                                                }
-                                            });
-                                            row.col(|ui| {
-                                                ui.label(&record.unit);
-                                            });
-                                            row.col(|ui| {
-                                                ui.label(format!("{:.4}", record.value));
-                                            });
+                                            for cell in &cells {
+                                                row.col(|ui| {
+                                                    ui.label(cell.as_str());
+                                                });
+                                            }
                                         });
                                     }
                                 });
@@ -275,14 +268,49 @@ impl super::MyApp {
     }
 
     pub fn record_measurement(&mut self) {
-        if !self.curr_meas.is_nan() {
-            let index = self.recording_data.len(); // Assign index based on current length
-            self.recording_data.push(super::Record {
-                index,
-                timestamp: chrono::Utc::now(),
-                unit: self.curr_unit.clone(),
-                value: self.curr_meas,
-            });
+        let Some((channels, status)) = self.recording_snapshot() else {
+            return;
+        };
+        let index = self.recording_data.len();
+        self.recording_data.push(super::Record {
+            index,
+            timestamp: chrono::Utc::now(),
+            channels,
+            status,
+        });
+    }
+
+    fn recording_snapshot(&self) -> Option<(Vec<super::RecordChannel>, Vec<super::RecordStatus>)> {
+        if self.scpi_is_psu {
+            let v = self.psu.meas_v;
+            let i = self.psu.meas_i;
+            let p = self.psu.meas_p;
+            if !v.is_finite() && !i.is_finite() && !p.is_finite() {
+                return None;
+            }
+            let bit = |on: bool| if on { "1" } else { "0" };
+            Some((
+                vec![
+                    record_channel("V", "V", v),
+                    record_channel("I", "A", i),
+                    record_channel("P", "W", p),
+                ],
+                vec![
+                    record_status("output", if self.psu.output_on { "ON" } else { "OFF" }),
+                    record_status("mode", self.psu.run.label()),
+                    record_status("ovp", bit(self.psu.ovp_fault)),
+                    record_status("ocp", bit(self.psu.ocp_fault)),
+                    record_status("otp", bit(self.psu.otp_fault)),
+                ],
+            ))
+        } else {
+            if !self.curr_meas.is_finite() {
+                return None;
+            }
+            Some((
+                vec![record_channel("value", &self.curr_unit, self.curr_meas)],
+                Vec::new(),
+            ))
         }
     }
 
@@ -291,26 +319,23 @@ impl super::MyApp {
             return;
         }
 
+        let (ch_names, st_names) = recording_column_names(&self.recording_data);
+        let legacy = is_legacy_layout(&self.recording_data);
+        let headers = export_headers(legacy, &ch_names, &st_names);
+
         match self.recording_format {
             super::RecordingFormat::Csv => {
                 let file =
                     File::create(&self.recording_file_path).expect("Failed to create CSV file");
                 let mut writer = WriterBuilder::new().from_writer(file);
                 writer
-                    .write_record(["Index", "Timestamp", "Unit", "Value"])
+                    .write_record(&headers)
                     .expect("Failed to write CSV header");
                 for record in &self.recording_data {
-                    let timestamp_str = match self.recording_timestamp_format {
-                        super::TimestampFormat::Rfc3339 => record.timestamp.to_rfc3339(),
-                        super::TimestampFormat::Unix => record.timestamp.timestamp().to_string(),
-                    };
+                    let ts = self.format_record_timestamp(record);
+                    let cells = export_cells(record, legacy, &ch_names, &st_names, &ts);
                     writer
-                        .write_record(&[
-                            record.index.to_string(),
-                            timestamp_str,
-                            record.unit.clone(),
-                            record.value.to_string(),
-                        ])
+                        .write_record(&cells)
                         .expect("Failed to write CSV record");
                 }
                 writer.flush().expect("Failed to flush CSV writer");
@@ -330,12 +355,7 @@ impl super::MyApp {
                                 serde_json::Number::from(record.timestamp.timestamp()),
                             ),
                         };
-                        serde_json::json!({
-                            "index": record.index,
-                            "timestamp": timestamp_value,
-                            "unit": record.unit,
-                            "value": record.value,
-                        })
+                        record_json(record, timestamp_value, legacy)
                     })
                     .collect();
                 serde_json::to_writer(file, &records).expect("Failed to write JSON data");
@@ -346,38 +366,350 @@ impl super::MyApp {
                 let mut sheet = workbook
                     .add_worksheet(None)
                     .expect("Failed to add worksheet");
-                sheet
-                    .write_string(0, 0, "Index", None)
-                    .expect("Failed to write XLSX header");
-                sheet
-                    .write_string(0, 1, "Timestamp", None)
-                    .expect("Failed to write XLSX header");
-                sheet
-                    .write_string(0, 2, "Unit", None)
-                    .expect("Fixed headers");
-                sheet
-                    .write_string(0, 3, "Value", None)
-                    .expect("Failed to write XLSX header");
+                for (col, title) in headers.iter().enumerate() {
+                    sheet
+                        .write_string(0, col as u16, title, None)
+                        .expect("Failed to write XLSX header");
+                }
                 for (i, record) in self.recording_data.iter().enumerate() {
-                    sheet
-                        .write_number((i + 1) as u32, 0, record.index as f64, None)
-                        .expect("Failed to write XLSX record");
-                    let timestamp_str = match self.recording_timestamp_format {
-                        super::TimestampFormat::Rfc3339 => record.timestamp.to_rfc3339(),
-                        super::TimestampFormat::Unix => record.timestamp.timestamp().to_string(),
-                    };
-                    sheet
-                        .write_string((i + 1) as u32, 1, &timestamp_str, None)
-                        .expect("Failed to write XLSX record");
-                    sheet
-                        .write_string((i + 1) as u32, 2, &record.unit, None)
-                        .expect("Failed to write XLSX record");
-                    sheet
-                        .write_number((i + 1) as u32, 3, record.value, None)
-                        .expect("Failed to write XLSX record");
+                    let ts = self.format_record_timestamp(record);
+                    let cells = export_cells(record, legacy, &ch_names, &st_names, &ts);
+                    let row = (i + 1) as u32;
+                    for (col, cell) in cells.iter().enumerate() {
+                        let col = col as u16;
+                        if col == 0 {
+                            sheet
+                                .write_number(row, col, record.index as f64, None)
+                                .expect("Failed to write XLSX record");
+                        } else if let Ok(n) = cell.parse::<f64>()
+                            && n.is_finite()
+                        {
+                            sheet
+                                .write_number(row, col, n, None)
+                                .expect("Failed to write XLSX record");
+                        } else {
+                            sheet
+                                .write_string(row, col, cell, None)
+                                .expect("Failed to write XLSX record");
+                        }
+                    }
                 }
                 workbook.close().expect("Failed to close XLSX workbook");
             }
         }
+    }
+
+    fn format_record_timestamp(&self, record: &super::Record) -> String {
+        match self.recording_timestamp_format {
+            super::TimestampFormat::Rfc3339 => record.timestamp.to_rfc3339(),
+            super::TimestampFormat::Unix => record.timestamp.timestamp().to_string(),
+        }
+    }
+}
+
+fn record_channel(name: &str, unit: &str, value: f64) -> super::RecordChannel {
+    super::RecordChannel {
+        name: name.to_owned(),
+        unit: unit.to_owned(),
+        value,
+    }
+}
+
+fn record_status(name: &str, value: &str) -> super::RecordStatus {
+    super::RecordStatus {
+        name: name.to_owned(),
+        value: value.to_owned(),
+    }
+}
+
+fn is_legacy_layout(data: &[super::Record]) -> bool {
+    !data.is_empty()
+        && data
+            .iter()
+            .all(|r| r.channels.len() == 1 && r.status.is_empty())
+}
+
+fn recording_column_names(data: &[super::Record]) -> (Vec<String>, Vec<String>) {
+    let mut channels = Vec::new();
+    let mut status = Vec::new();
+    for record in data {
+        for ch in &record.channels {
+            if !channels.iter().any(|n| n == &ch.name) {
+                channels.push(ch.name.clone());
+            }
+        }
+        for st in &record.status {
+            if !status.iter().any(|n| n == &st.name) {
+                status.push(st.name.clone());
+            }
+        }
+    }
+    (channels, status)
+}
+
+fn export_headers(legacy: bool, channels: &[String], status: &[String]) -> Vec<String> {
+    let mut headers = vec!["Index".to_owned(), "Timestamp".to_owned()];
+    if legacy {
+        headers.push("Unit".to_owned());
+        headers.push("Value".to_owned());
+        return headers;
+    }
+    for name in channels {
+        headers.push(name.clone());
+        headers.push(format!("{name}_unit"));
+    }
+    headers.extend(status.iter().cloned());
+    headers
+}
+
+fn preview_headers(legacy: bool, channels: &[String], status: &[String]) -> Vec<String> {
+    let mut headers = vec!["Index".to_owned(), "Timestamp".to_owned()];
+    if legacy {
+        headers.push("Unit".to_owned());
+        headers.push("Value".to_owned());
+        return headers;
+    }
+    headers.extend(channels.iter().cloned());
+    headers.extend(status.iter().cloned());
+    headers
+}
+
+fn format_num(v: f64) -> String {
+    if v.is_finite() {
+        v.to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn channel_by_name<'a>(record: &'a super::Record, name: &str) -> Option<&'a super::RecordChannel> {
+    record.channels.iter().find(|c| c.name == name)
+}
+
+fn status_by_name<'a>(record: &'a super::Record, name: &str) -> Option<&'a super::RecordStatus> {
+    record.status.iter().find(|s| s.name == name)
+}
+
+fn export_cells(
+    record: &super::Record,
+    legacy: bool,
+    channels: &[String],
+    status: &[String],
+    timestamp: &str,
+) -> Vec<String> {
+    let mut cells = vec![record.index.to_string(), timestamp.to_owned()];
+    if legacy {
+        let ch = &record.channels[0];
+        cells.push(ch.unit.clone());
+        cells.push(format_num(ch.value));
+        return cells;
+    }
+    for name in channels {
+        match channel_by_name(record, name) {
+            Some(ch) => {
+                cells.push(format_num(ch.value));
+                cells.push(ch.unit.clone());
+            }
+            None => {
+                cells.push(String::new());
+                cells.push(String::new());
+            }
+        }
+    }
+    for name in status {
+        cells.push(
+            status_by_name(record, name)
+                .map(|s| s.value.clone())
+                .unwrap_or_default(),
+        );
+    }
+    cells
+}
+
+fn preview_cells(
+    record: &super::Record,
+    legacy: bool,
+    channels: &[String],
+    status: &[String],
+    timestamp: &str,
+) -> Vec<String> {
+    let mut cells = vec![record.index.to_string(), timestamp.to_owned()];
+    if legacy {
+        let ch = &record.channels[0];
+        cells.push(ch.unit.clone());
+        cells.push(format!("{:.4}", ch.value));
+        return cells;
+    }
+    for name in channels {
+        cells.push(
+            channel_by_name(record, name)
+                .map(|ch| {
+                    if ch.value.is_finite() {
+                        format!("{:.4}", ch.value)
+                    } else {
+                        String::new()
+                    }
+                })
+                .unwrap_or_default(),
+        );
+    }
+    for name in status {
+        cells.push(
+            status_by_name(record, name)
+                .map(|s| s.value.clone())
+                .unwrap_or_default(),
+        );
+    }
+    cells
+}
+
+fn json_number(v: f64) -> serde_json::Value {
+    serde_json::Number::from_f64(v)
+        .map(serde_json::Value::Number)
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn record_json(
+    record: &super::Record,
+    timestamp: serde_json::Value,
+    legacy: bool,
+) -> serde_json::Value {
+    if legacy {
+        let ch = &record.channels[0];
+        return serde_json::json!({
+            "index": record.index,
+            "timestamp": timestamp,
+            "unit": ch.unit,
+            "value": json_number(ch.value),
+        });
+    }
+    let channels: Vec<serde_json::Value> = record
+        .channels
+        .iter()
+        .map(|ch| {
+            serde_json::json!({
+                "name": ch.name,
+                "unit": ch.unit,
+                "value": json_number(ch.value),
+            })
+        })
+        .collect();
+    let status: Vec<serde_json::Value> = record
+        .status
+        .iter()
+        .map(|st| {
+            serde_json::json!({
+                "name": st.name,
+                "value": st.value,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "index": record.index,
+        "timestamp": timestamp,
+        "channels": channels,
+        "status": status,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn sample_ts() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap()
+    }
+
+    fn dmm_record() -> super::super::Record {
+        super::super::Record {
+            index: 0,
+            timestamp: sample_ts(),
+            channels: vec![record_channel("value", "VDC", 5.02681)],
+            status: vec![],
+        }
+    }
+
+    fn psu_record() -> super::super::Record {
+        super::super::Record {
+            index: 1,
+            timestamp: sample_ts(),
+            channels: vec![
+                record_channel("V", "V", 12.0),
+                record_channel("I", "A", 0.118),
+                record_channel("P", "W", 1.419),
+            ],
+            status: vec![
+                record_status("output", "ON"),
+                record_status("mode", "CV"),
+                record_status("ovp", "0"),
+                record_status("ocp", "0"),
+                record_status("otp", "0"),
+            ],
+        }
+    }
+
+    #[test]
+    fn dmm_export_keeps_unit_value_columns() {
+        let data = vec![dmm_record()];
+        let (ch, st) = recording_column_names(&data);
+        assert!(is_legacy_layout(&data));
+        assert_eq!(
+            export_headers(true, &ch, &st),
+            ["Index", "Timestamp", "Unit", "Value"]
+        );
+        let cells = export_cells(&data[0], true, &ch, &st, "TS");
+        assert_eq!(cells, ["0", "TS", "VDC", "5.02681"]);
+    }
+
+    #[test]
+    fn psu_export_has_channels_and_status() {
+        let data = vec![psu_record()];
+        let (ch, st) = recording_column_names(&data);
+        assert!(!is_legacy_layout(&data));
+        assert_eq!(ch, ["V", "I", "P"]);
+        assert_eq!(st, ["output", "mode", "ovp", "ocp", "otp"]);
+        let headers = export_headers(false, &ch, &st);
+        assert_eq!(
+            headers,
+            [
+                "Index",
+                "Timestamp",
+                "V",
+                "V_unit",
+                "I",
+                "I_unit",
+                "P",
+                "P_unit",
+                "output",
+                "mode",
+                "ovp",
+                "ocp",
+                "otp",
+            ]
+        );
+        let cells = export_cells(&data[0], false, &ch, &st, "TS");
+        assert_eq!(
+            cells,
+            [
+                "1", "TS", "12", "V", "0.118", "A", "1.419", "W", "ON", "CV", "0", "0", "0"
+            ]
+        );
+    }
+
+    #[test]
+    fn dmm_json_stays_flat() {
+        let v = record_json(&dmm_record(), serde_json::json!("TS"), true);
+        assert_eq!(v["unit"], "VDC");
+        assert!(v.get("channels").is_none());
+    }
+
+    #[test]
+    fn psu_json_lists_channels_and_status() {
+        let v = record_json(&psu_record(), serde_json::json!("TS"), false);
+        assert_eq!(v["channels"].as_array().unwrap().len(), 3);
+        assert_eq!(v["status"].as_array().unwrap().len(), 5);
+        assert_eq!(v["channels"][1]["name"], "I");
+        assert_eq!(v["status"][1]["value"], "CV");
     }
 }

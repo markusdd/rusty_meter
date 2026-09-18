@@ -1,5 +1,8 @@
-use egui::{Color32, Slider, SliderClamping};
-use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints};
+use egui::{Color32, RichText, Slider, SliderClamping};
+use egui_plot::{
+    AxisHints, Bar, BarChart, GridMark, HLine, HPlacement, HoverPosition, Legend, Line, LineStyle,
+    Plot, PlotPoints,
+};
 use std::collections::VecDeque;
 
 use crate::multimeter::MeterMode;
@@ -82,6 +85,177 @@ pub fn show_line_graph(
             plot_ui.set_auto_bounds([false, true]);
             plot_ui.line(line);
         });
+    });
+}
+
+#[derive(Clone, Copy)]
+pub struct PsuGraph<'a> {
+    pub volt: &'a VecDeque<f64>,
+    pub curr: &'a VecDeque<f64>,
+    pub power: &'a VecDeque<f64>,
+    pub set_v: f64,
+    pub set_i: f64,
+    pub set_p: f64,
+    pub color_v: Color32,
+    pub color_i: Color32,
+    pub color_p: Color32,
+}
+
+/// Place `set` at this fraction of plot height when it is the scale driver.
+/// V / I / P use slightly different values so the three set-lines separate
+/// without lying: a 5 V trace still meets the 5 V line.
+const V_SET_AT: f64 = 1.00;
+const I_SET_AT: f64 = 0.96;
+const P_SET_AT: f64 = 0.92;
+
+fn axis_span(set: f64, values: &VecDeque<f64>, set_at: f64) -> f64 {
+    let data_max = values.iter().copied().fold(0.0_f64, f64::max);
+    let set_at = set_at.max(1e-3);
+    (set / set_at).max(data_max).max(1e-6)
+}
+
+fn scaled_points(values: &VecDeque<f64>, reverse: bool, span: f64) -> PlotPoints<'static> {
+    let span = span.max(1e-9);
+    let mut points: Vec<f64> = values.iter().map(|v| *v / span).collect();
+    if reverse {
+        points.reverse();
+    }
+    PlotPoints::from_ys_f64(&points)
+}
+
+fn psu_hline(name: &str, y: f64, color: Color32, style: LineStyle) -> HLine {
+    HLine::new(name, y)
+        .stroke(egui::Stroke::new(1.5, color))
+        .style(style)
+}
+
+fn format_axis_tick(span: f64, mark: GridMark) -> String {
+    let value = mark.value * span;
+    let step = mark.step_size * span;
+    let decimals = if step > 0.0 {
+        (-step.log10().round() as i32).max(0) as usize
+    } else {
+        3
+    };
+    format!("{value:.decimals$}")
+}
+
+fn qty_axis(label: &str, color: Color32, span: f64, placement: HPlacement) -> AxisHints<'static> {
+    AxisHints::new_y()
+        .label(RichText::new(label).color(color))
+        .placement(placement)
+        .min_thickness(40.0)
+        .tick_label_color(color)
+        .formatter(move |mark, _| format_axis_tick(span, mark))
+}
+
+/// One plot: V / I / P overlay, each with its own Y axis (normalized to setpoint).
+#[allow(clippy::too_many_arguments)]
+pub fn show_psu_graphs(
+    ui: &mut egui::Ui,
+    data: PsuGraph<'_>,
+    reverse_graph: bool,
+    mem_depth: &mut usize,
+    graph_update_interval_ms: &mut u64,
+    reverse_graph_mut: &mut bool,
+    mem_depth_max: usize,
+    graph_update_interval_max: u64,
+) {
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                Slider::new(mem_depth, 10..=mem_depth_max)
+                    .text("Memory Depth")
+                    .step_by(10.0)
+                    .clamping(SliderClamping::Always),
+            );
+            ui.add(
+                Slider::new(graph_update_interval_ms, 10..=graph_update_interval_max)
+                    .text("Update Interval (ms)")
+                    .step_by(10.0)
+                    .clamping(SliderClamping::Always),
+            );
+            ui.checkbox(reverse_graph_mut, "Reverse Graph (most recent on left)");
+        });
+        ui.label("Graph Adjustments");
+        ui.separator();
+
+        let v_span = axis_span(data.set_v, data.volt, V_SET_AT);
+        let i_span = axis_span(data.set_i, data.curr, I_SET_AT);
+        let p_span = axis_span(data.set_p, data.power, P_SET_AT);
+
+        let y_axes = vec![
+            qty_axis("V", data.color_v, v_span, HPlacement::Left),
+            qty_axis("A", data.color_i, i_span, HPlacement::Right),
+            qty_axis("W", data.color_p, p_span, HPlacement::Right),
+        ];
+
+        Plot::new("psu_graph")
+            .legend(Legend::default().text_style(egui::TextStyle::Monospace))
+            .custom_y_axes(y_axes)
+            .x_axis_label("Samples")
+            .show_axes(true)
+            .show_grid(true)
+            .label_formatter(move |pos| match pos {
+                HoverPosition::NearDataPoint {
+                    plot_name,
+                    position,
+                    ..
+                } => {
+                    let y = match *plot_name {
+                        "V" => format!("{:.3} V", position.y * v_span),
+                        "A" => format!("{:.3} A", position.y * i_span),
+                        "W" => format!("{:.3} W", position.y * p_span),
+                        "Set V" => format!("Set {:.3} V", data.set_v),
+                        "Set I" => format!("Set {:.3} A", data.set_i),
+                        "Set P" => format!("Set {:.3} W", data.set_p),
+                        other => other.to_owned(),
+                    };
+                    Some(format!("{y}\nsample {:.0}", position.x))
+                }
+                HoverPosition::Elsewhere { position } => Some(format!(
+                    "{:.3} V\n{:.3} A\n{:.3} W",
+                    position.y * v_span,
+                    position.y * i_span,
+                    position.y * p_span
+                )),
+            })
+            .show(ui, |plot_ui| {
+                let new_bounds =
+                    egui_plot::PlotBounds::from_min_max([0.0, 0.0], [*mem_depth as f64, 1.08]);
+                plot_ui.set_plot_bounds(new_bounds);
+                plot_ui.set_auto_bounds([false, false]);
+                plot_ui.line(
+                    Line::new("V", scaled_points(data.volt, reverse_graph, v_span))
+                        .stroke(egui::Stroke::new(2.0, data.color_v)),
+                );
+                plot_ui.line(
+                    Line::new("A", scaled_points(data.curr, reverse_graph, i_span))
+                        .stroke(egui::Stroke::new(2.0, data.color_i)),
+                );
+                plot_ui.line(
+                    Line::new("W", scaled_points(data.power, reverse_graph, p_span))
+                        .stroke(egui::Stroke::new(2.0, data.color_p)),
+                );
+                plot_ui.hline(psu_hline(
+                    "Set V",
+                    data.set_v / v_span,
+                    data.color_v,
+                    LineStyle::dashed_dense(),
+                ));
+                plot_ui.hline(psu_hline(
+                    "Set I",
+                    data.set_i / i_span,
+                    data.color_i,
+                    LineStyle::dashed_loose(),
+                ));
+                plot_ui.hline(psu_hline(
+                    "Set P",
+                    data.set_p / p_span,
+                    data.color_p,
+                    LineStyle::dotted_dense(),
+                ));
+            });
     });
 }
 

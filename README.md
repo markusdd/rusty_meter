@@ -5,8 +5,9 @@ If you like this, a small donation is appreciated:
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R6R8DQO8C)
 
 RustyMeter is a GUI application written in Rust powered by the awesome egui framework and builds
-on the work of @TheHWCave to turn your OWON XDM or Victor multimeter into a PC-based powerhouse
-with neat graphing, recording, using it on stream etc.
+on the work of @TheHWCave to turn your OWON XDM or Victor multimeter — and now also a Kiprim DC /
+Owon SPE power supply — into a PC-based powerhouse with neat graphing, recording, using it on
+stream etc.
 
 Meters which have been confirmed working already:
 
@@ -15,15 +16,25 @@ Meters which have been confirmed working already:
 - Owon XDM2041 (except 4W resistance, not yet implemented)
 - Victor 86 series
 
-Looking for testers for the XDM3000 series!
+Power supplies:
 
-![screenshot](assets/screenshot.png)
+- Kiprim DC620S (Owon SPE SCPI dialect; other SPE / Kiprim DC models should work)
+
+Looking for testers for the XDM3000 series and further SPE/Kiprim SKUs!
+
+*OWON XDM1041 — live graph and histogram*
+
+![OWON XDM1041](assets/screenshot.png)
+
+*Kiprim DC620S — live V/I/P, setpoints, output and macros*
+
+![Kiprim DC620S](assets/psu_screenshot.png)
 
 ![recorder](assets/recorder.png)
 
 ## SCPI macros
 
-On OWON SCPI meters you can store sequences of commands: play them on connect after the settings bootstrap, or click them as buttons under the mode grid. Victor read-only connections have no macros.
+On OWON SCPI meters and SPE/Kiprim PSUs you can store sequences of commands: play them on connect after the settings bootstrap, or click them as buttons on the main window. Victor read-only connections have no macros.
 
 ![macros](assets/macros.png)
 
@@ -36,7 +47,7 @@ On OWON SCPI meters you can store sequences of commands: play them on connect af
 Eventually, as this is all SCPI based (except the Victor driver), it could also be extended to other meters that have SCPI interfaces.
 Maybe some stuff even works out of the box.
 
-**NOTE:** This is work in progress and I have more features for this in mind. What works right now is connecting to the multimeter, switching modes and ranges as well as sampling rates, SCPI macros on Owon meters, graphing for a configurable amount of last samples, and recording samples to CSV, XLSX and JSON.
+**NOTE:** This is work in progress and I have more features for this in mind. What works right now is connecting to an OWON XDM or Victor meter, switching modes and ranges as well as sampling rates, driving a Kiprim DC / Owon SPE PSU (setpoints, output, live V/I/P), SCPI macros on Owon meters and those PSUs, graphing for a configurable amount of last samples, and recording samples to CSV, XLSX and JSON.
 
 **TODO:**
 

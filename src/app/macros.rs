@@ -29,7 +29,9 @@ impl super::MyApp {
                 egui::Panel::top("scpi_macro_toolbar").show(ui, |ui| {
                     ui.label(
                         "Sequences of SCPI commands. A connect macro runs after the built-in \
-                         settings bootstrap for the detected meter. If there are multiple they run in list order. \
+                         settings bootstrap for the detected meter. PSU bootstrap sends OUTP OFF, then \
+                         last voltage/current; it never turns the output on. A connect macro may turn \
+                         the output on afterwards. If there are multiple they run in list order. \
                          Button macros appear below the mode buttons on the main window.",
                     );
                     ui.separator();
@@ -165,6 +167,15 @@ impl super::MyApp {
                                                 .clicked()
                                             {
                                                 m.applies_to = MacroTarget::OwonXdm6000;
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    matches!(m.applies_to, MacroTarget::SpePsu),
+                                                    "Kiprim DC / Owon SPE PSU",
+                                                )
+                                                .clicked()
+                                            {
+                                                m.applies_to = MacroTarget::SpePsu;
                                             }
                                             let this_label = if live_model.is_empty() {
                                                 "This meter (connect to set model)".to_owned()

@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## 0.7.0
+
+Add support for Kiprim DC / Owon SPE single-channel power supplies
+
+This release adds a second SCPI device class next to the OWON XDM meters.
+You can read live voltage, current and power, set V/I and OVP/OCP, and turn
+the output on and off. The graph overlays all three quantities.
+
+On connect the last setpoints are restored, but the output is always turned
+off first so a leftover ON at the previous voltage cannot surprise a DUT.
+A connect macro may still turn the output on afterwards if you want that.
+
+Tested on a Kiprim DC620S (same SPE SCPI dialect as the Owon SPE series).
+
+Recording stores every channel on a sample, not only the primary reading: PSU
+files include V, I, P, output, CV/CC, and protection flags. A DMM capture with
+a single value is still Index/Timestamp/Unit/Value.
+
+Also, all dependencies have been bumped to latest versions.
+
 ## 0.6.0
 
 Major refactor of the SCPI serial system, status updates now run independent

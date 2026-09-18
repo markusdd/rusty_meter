@@ -5,6 +5,7 @@ mod app;
 pub use app::MyApp;
 mod helpers;
 mod multimeter;
+mod psu;
 mod scpi_macro;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod victor_86bcd_capture;
