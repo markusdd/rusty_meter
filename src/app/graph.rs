@@ -5,6 +5,7 @@ use egui_plot::{
 };
 use std::collections::VecDeque;
 
+use crate::helpers::is_meter_overload;
 use crate::multimeter::MeterMode;
 
 // Configuration for graph settings
@@ -23,10 +24,67 @@ impl Default for GraphConfig {
     }
 }
 
+type PlotRun = Vec<[f64; 2]>;
+
+/// Split a sample series into measurement runs and overload runs.
+/// OL points use the last (or first) valid Y so they stay in axis range; they
+/// are never NaN (egui panics on NaN paths).
+fn split_meas_and_ol(ys: &[f64], mode: MeterMode) -> (Vec<PlotRun>, Vec<PlotRun>) {
+    let fallback = ys
+        .iter()
+        .copied()
+        .find(|y| y.is_finite() && !is_meter_overload(*y, mode))
+        .unwrap_or(0.0);
+    let mut meas_runs: Vec<PlotRun> = Vec::new();
+    let mut ol_runs: Vec<PlotRun> = Vec::new();
+    let mut meas: PlotRun = Vec::new();
+    let mut ol: PlotRun = Vec::new();
+    let mut last_valid = fallback;
+    for (i, &y) in ys.iter().enumerate() {
+        let x = i as f64;
+        if !y.is_finite() {
+            if !meas.is_empty() {
+                meas_runs.push(std::mem::take(&mut meas));
+            }
+            if !ol.is_empty() {
+                ol_runs.push(std::mem::take(&mut ol));
+            }
+        } else if is_meter_overload(y, mode) {
+            if !meas.is_empty() {
+                meas_runs.push(std::mem::take(&mut meas));
+            }
+            ol.push([x, last_valid]);
+        } else {
+            if !ol.is_empty() {
+                ol_runs.push(std::mem::take(&mut ol));
+            }
+            last_valid = y;
+            meas.push([x, y]);
+        }
+    }
+    if !meas.is_empty() {
+        meas_runs.push(meas);
+    }
+    if !ol.is_empty() {
+        ol_runs.push(ol);
+    }
+    (meas_runs, ol_runs)
+}
+
+/// One screen-space segment per OL run so dash length is even in pixels.
+/// Per-sample vertices would restart the dash pattern on serial jitter.
+fn flatten_ol_run(run: &[[f64; 2]]) -> PlotRun {
+    match run {
+        [] => Vec::new(),
+        [p] => vec![[p[0] - 0.4, p[1]], [p[0] + 0.4, p[1]]],
+        [first, .., last] => vec![*first, *last],
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn show_line_graph(
     ui: &mut egui::Ui,
-    values: &VecDeque<f64>,
+    values: &mut VecDeque<f64>,
     reverse_graph: bool,
     graph_line_color: Color32,
     mem_depth: &mut usize,
@@ -35,15 +93,13 @@ pub fn show_line_graph(
     mem_depth_max: usize,
     graph_update_interval_max: u64,
     curr_unit: &str,
+    metermode: MeterMode,
 ) {
-    let values: Vec<f64> = values.iter().copied().collect();
-    let points: Vec<f64> = if reverse_graph {
-        values.into_iter().rev().collect()
-    } else {
-        values
-    };
-    let line = Line::new(curr_unit, PlotPoints::from_ys_f64(&points))
-        .stroke(egui::Stroke::new(2.0, graph_line_color));
+    let mut ys: Vec<f64> = values.iter().copied().collect();
+    if reverse_graph {
+        ys.reverse();
+    }
+    let (meas_runs, ol_runs) = split_meas_and_ol(&ys, metermode);
     let plot = Plot::new("graph")
         .legend(Legend::default().text_style(egui::TextStyle::Monospace))
         .y_axis_min_width(4.0)
@@ -67,6 +123,9 @@ pub fn show_line_graph(
                     .step_by(10.0)
                     .clamping(SliderClamping::Always),
             );
+            if ui.button("Reset Graph").clicked() {
+                values.clear();
+            }
             ui.checkbox(reverse_graph_mut, "Reverse Graph (most recent on left)");
         });
         ui.label("Graph Adjustments");
@@ -83,16 +142,41 @@ pub fn show_line_graph(
             plot_ui.set_plot_bounds(new_bounds);
             // Disable x-axis autoscaling, enable y-axis autoscaling
             plot_ui.set_auto_bounds([false, true]);
-            plot_ui.line(line);
+            for (i, run) in meas_runs.into_iter().enumerate() {
+                let name = if i == 0 { curr_unit } else { "" };
+                plot_ui.line(
+                    Line::new(format!("meas{i}"), run)
+                        .name(name)
+                        .stroke(egui::Stroke::new(2.0, graph_line_color)),
+                );
+            }
+            for (i, run) in ol_runs.into_iter().enumerate() {
+                let name = if i == 0 { "OVERLOAD" } else { "" };
+                plot_ui.line(
+                    Line::new(format!("ol{i}"), flatten_ol_run(&run))
+                        .name(name)
+                        .stroke(egui::Stroke::new(1.5, Color32::from_rgb(220, 50, 50)))
+                        .style(LineStyle::Dashed { length: 3.0 }),
+                );
+            }
         });
     });
 }
 
 #[derive(Clone, Copy)]
+pub struct PsuGraphStyle {
+    pub set_v: f64,
+    pub set_i: f64,
+    pub set_p: f64,
+    pub color_v: Color32,
+    pub color_i: Color32,
+    pub color_p: Color32,
+}
+
 pub struct PsuGraph<'a> {
-    pub volt: &'a VecDeque<f64>,
-    pub curr: &'a VecDeque<f64>,
-    pub power: &'a VecDeque<f64>,
+    pub volt: &'a mut VecDeque<f64>,
+    pub curr: &'a mut VecDeque<f64>,
+    pub power: &'a mut VecDeque<f64>,
     pub set_v: f64,
     pub set_i: f64,
     pub set_p: f64,
@@ -175,6 +259,11 @@ pub fn show_psu_graphs(
                     .step_by(10.0)
                     .clamping(SliderClamping::Always),
             );
+            if ui.button("Reset Graph").clicked() {
+                data.volt.clear();
+                data.curr.clear();
+                data.power.clear();
+            }
             ui.checkbox(reverse_graph_mut, "Reverse Graph (most recent on left)");
         });
         ui.label("Graph Adjustments");
@@ -284,7 +373,11 @@ pub fn show_histogram(
     );
 
     // Create bar chart data
-    let hist_values_vec: Vec<f64> = hist_values.iter().copied().collect();
+    let hist_values_vec: Vec<f64> = hist_values
+        .iter()
+        .copied()
+        .filter(|y| y.is_finite() && !is_meter_overload(*y, metermode))
+        .collect();
     let (bar_chart, max_count, _num_bins, _bin_width, _range_start, _range_end) =
         if hist_values_vec.is_empty() {
             (
@@ -539,7 +632,8 @@ pub fn show_histogram(
 impl super::MyApp {
     // Update histogram buffer with new measurement
     pub fn update_histogram(&mut self, meas: f64) {
-        if !meas.is_nan() && self.hist_collect_active {
+        if meas.is_finite() && !is_meter_overload(meas, self.metermode) && self.hist_collect_active
+        {
             let current_time = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -554,5 +648,45 @@ impl super::MyApp {
                 self.last_hist_collect_time = current_time;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ol_run_sits_in_the_gap_at_last_valid_y() {
+        let ys = [1.0, 2.0, 9.9e31, 9.9e31, 3.0];
+        let (meas, ol) = split_meas_and_ol(&ys, MeterMode::Res);
+        assert_eq!(meas.len(), 2);
+        assert_eq!(meas[0], [[0.0, 1.0], [1.0, 2.0]]);
+        assert_eq!(meas[1], [[4.0, 3.0]]);
+        assert_eq!(ol.len(), 1);
+        assert_eq!(ol[0], [[2.0, 2.0], [3.0, 2.0]]);
+    }
+
+    #[test]
+    fn all_ol_keeps_scrolling_at_zero() {
+        let ys = [9.9e31, 9.9e31];
+        let (meas, ol) = split_meas_and_ol(&ys, MeterMode::Adc);
+        assert!(meas.is_empty());
+        assert_eq!(ol, vec![vec![[0.0, 0.0], [1.0, 0.0]]]);
+    }
+
+    #[test]
+    fn one_gigahertz_is_not_an_ol_run() {
+        let ys = [1e9];
+        let (meas, ol) = split_meas_and_ol(&ys, MeterMode::Freq);
+        assert_eq!(meas, vec![vec![[0.0, 1e9]]]);
+        assert!(ol.is_empty());
+    }
+
+    #[test]
+    fn ol_overlay_is_one_segment_not_per_sample() {
+        let ys = [1.0, 9.9e31, 9.9e31, 9.9e31, 2.0];
+        let (_, ol) = split_meas_and_ol(&ys, MeterMode::Res);
+        assert_eq!(ol[0].len(), 3);
+        assert_eq!(flatten_ol_run(&ol[0]), [[1.0, 1.0], [3.0, 1.0]]);
     }
 }

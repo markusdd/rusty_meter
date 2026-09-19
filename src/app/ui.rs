@@ -86,7 +86,10 @@ pub enum PlotTab {
 
 // Tab viewer implementation for PlotTab
 struct PlotTabViewer<'a> {
-    values: &'a VecDeque<f64>,
+    values: &'a mut VecDeque<f64>,
+    psu_curr: Option<&'a mut VecDeque<f64>>,
+    psu_power: Option<&'a mut VecDeque<f64>>,
+    psu_style: Option<super::graph::PsuGraphStyle>,
     hist_values: &'a mut VecDeque<f64>,
     reverse_graph: &'a mut bool,
     graph_line_color: egui::Color32,
@@ -103,7 +106,6 @@ struct PlotTabViewer<'a> {
     graph_update_interval_max: u64,
     hist_mem_depth_max: usize,
     curr_unit: &'a str,
-    psu_graph: Option<super::graph::PsuGraph<'a>>,
 }
 
 impl TabViewer for PlotTabViewer<'_> {
@@ -123,10 +125,24 @@ impl TabViewer for PlotTabViewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
             PlotTab::Graph => {
-                if let Some(data) = self.psu_graph {
+                if let (Some(curr), Some(power), Some(style)) = (
+                    self.psu_curr.as_mut(),
+                    self.psu_power.as_mut(),
+                    self.psu_style,
+                ) {
                     super::graph::show_psu_graphs(
                         ui,
-                        data,
+                        super::graph::PsuGraph {
+                            volt: self.values,
+                            curr,
+                            power,
+                            set_v: style.set_v,
+                            set_i: style.set_i,
+                            set_p: style.set_p,
+                            color_v: style.color_v,
+                            color_i: style.color_i,
+                            color_p: style.color_p,
+                        },
                         *self.reverse_graph,
                         self.mem_depth,
                         self.graph_update_interval_ms,
@@ -146,6 +162,7 @@ impl TabViewer for PlotTabViewer<'_> {
                         self.mem_depth_max,
                         self.graph_update_interval_max,
                         self.curr_unit,
+                        self.metermode,
                     );
                 }
             }
@@ -1000,7 +1017,10 @@ impl super::MyApp {
                                     // 86B/C/D only: glass text from segment decode.
                                     let lcd_override = if self.connection_type
                                         == super::ConnectionType::Victor86bcdSerial
-                                        && self.curr_meas != crate::helpers::METER_OVERLOAD_VALUE
+                                        && !crate::helpers::is_meter_overload(
+                                            self.curr_meas,
+                                            self.metermode,
+                                        )
                                         && !self.victor_lcd_display.is_empty()
                                     {
                                         Some((
@@ -1024,8 +1044,10 @@ impl super::MyApp {
                                             && !auto_scale
                                             && !self.curr_unit.is_empty()
                                             && self.curr_meas.is_finite()
-                                            && self.curr_meas
-                                                != crate::helpers::METER_OVERLOAD_VALUE;
+                                            && !crate::helpers::is_meter_overload(
+                                                self.curr_meas,
+                                                self.metermode,
+                                            );
 
                                         if use_meter_unit {
                                             // What the meter “sends” as unit for this range.
@@ -1257,7 +1279,25 @@ impl super::MyApp {
                 // Scope to limit the mutable borrow of plot_dock_state
                 let dock_state = &mut self.plot_dock_state;
                 let mut viewer = PlotTabViewer {
-                    values: &self.values,
+                    values: &mut self.values,
+                    psu_curr: if self.scpi_is_psu {
+                        Some(&mut self.psu_curr_trace)
+                    } else {
+                        None
+                    },
+                    psu_power: if self.scpi_is_psu {
+                        Some(&mut self.psu_power_trace)
+                    } else {
+                        None
+                    },
+                    psu_style: self.scpi_is_psu.then_some(super::graph::PsuGraphStyle {
+                        set_v: f64::from(self.psu_plot_v),
+                        set_i: f64::from(self.psu_plot_i),
+                        set_p: f64::from(self.psu_plot_v) * f64::from(self.psu_plot_i),
+                        color_v: self.graph_line_color,
+                        color_i: self.graph_line_color_secondary,
+                        color_p: self.graph_line_color_tertiary,
+                    }),
                     hist_values: &mut self.hist_values,
                     reverse_graph: &mut self.reverse_graph,
                     graph_line_color: self.graph_line_color,
@@ -1274,17 +1314,6 @@ impl super::MyApp {
                     graph_update_interval_max: self.graph_update_interval_max,
                     hist_mem_depth_max: self.hist_mem_depth_max,
                     curr_unit: &self.curr_unit,
-                    psu_graph: self.scpi_is_psu.then_some(super::graph::PsuGraph {
-                        volt: &self.values,
-                        curr: &self.psu_curr_trace,
-                        power: &self.psu_power_trace,
-                        set_v: f64::from(self.psu_plot_v),
-                        set_i: f64::from(self.psu_plot_i),
-                        set_p: f64::from(self.psu_plot_v) * f64::from(self.psu_plot_i),
-                        color_v: self.graph_line_color,
-                        color_i: self.graph_line_color_secondary,
-                        color_p: self.graph_line_color_tertiary,
-                    }),
                 };
                 DockArea::new(dock_state)
                     .style(Style::from_egui(ui.style()))

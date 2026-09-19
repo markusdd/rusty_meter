@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 0.7.1
+
+Owon XDM1051 / XDM1251 (150000-count) support, closing [#20](https://github.com/markusdd/rusty_meter/issues/20).
+
+These meters use a much larger SCPI overload sentinel than the 41-series
+(`~1e31` / `9.9e37` vs `1e9`). Values that large are shown as OVERLOAD in every
+mode; the 1041 `1e9` flag is still only treated as OL in ohms / diode / continuity
+so a 1 GΩ or 1 GHz reading on another meter would graph normally. Overload
+samples leave a gap in the main trace, marked with a dashed red overlay so the
+graph keeps scrolling. Histogram still ignores them. The graph tab now has a
+Reset Graph button, matching Reset Histogram.
+
 ## 0.7.0
 
 Add support for Kiprim DC / Owon SPE single-channel power supplies

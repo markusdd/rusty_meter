@@ -12,7 +12,9 @@ stream etc.
 Meters which have been confirmed working already:
 
 - Owon XDM1041
+- Owon XDM1051
 - Owon XDM1241
+- Owon XDM1251
 - Owon XDM2041 (except 4W resistance, not yet implemented)
 - Victor 86 series
 

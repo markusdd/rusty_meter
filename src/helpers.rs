@@ -1,7 +1,25 @@
 use crate::multimeter::MeterMode;
 
-/// Sentinel value for open-line / overload on SCPI and Victor DM1107 meters.
+/// Compact XDM1041/1241 `MEAS?` open-line value, and the Victor OL flag.
+/// This is *not* a universal ceiling: 1 GΩ / 1 GHz are valid on other meters.
 pub const METER_OVERLOAD_VALUE: f64 = 1e9;
+
+/// Firmware sentinels such as XDM1051 `~1e31` / Keysight `9.9e37`.
+/// Below this, GΩ and GHz readings must still graph as numbers.
+pub const SCPI_OVERLOAD_MAGNITUDE: f64 = 1e20;
+
+/// Open/OL: huge SCPI sentinels in any mode, or the 1041 `1e9` flag in ohms-family modes.
+pub fn is_meter_overload(value: f64, mode: MeterMode) -> bool {
+    if !value.is_finite() {
+        return true;
+    }
+    let mag = value.abs();
+    if mag >= SCPI_OVERLOAD_MAGNITUDE {
+        return true;
+    }
+    mag == METER_OVERLOAD_VALUE
+        && matches!(mode, MeterMode::Diod | MeterMode::Cont | MeterMode::Res)
+}
 
 pub fn format_measurement(
     value: f64,
@@ -16,13 +34,7 @@ pub fn format_measurement(
         return ("    NaN".to_string(), "".to_string());
     }
 
-    // Check for overload/open condition (1e9) in specific modes
-    if value == METER_OVERLOAD_VALUE
-        && matches!(
-            meter_mode,
-            MeterMode::Diod | MeterMode::Cont | MeterMode::Res
-        )
-    {
+    if is_meter_overload(value, *meter_mode) {
         return ("OVERLOAD".to_string(), "".to_string());
     }
 
@@ -135,4 +147,40 @@ pub fn powered_by(ui: &mut egui::Ui) {
         );
         ui.label(".");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::multimeter::MeterMode;
+
+    #[test]
+    fn xdm1041_1e9_is_ol_only_in_ohms_family() {
+        assert!(is_meter_overload(1e9, MeterMode::Res));
+        assert!(is_meter_overload(1e9, MeterMode::Cont));
+        assert!(is_meter_overload(1e9, MeterMode::Diod));
+        assert!(!is_meter_overload(1e9, MeterMode::Freq));
+        assert!(!is_meter_overload(1e9, MeterMode::Vdc));
+        assert!(!is_meter_overload(1e10, MeterMode::Res));
+        assert!(!is_meter_overload(50e6, MeterMode::Res));
+    }
+
+    #[test]
+    fn huge_scpi_sentinels_are_ol_in_every_mode() {
+        for mode in MeterMode::ALL {
+            assert!(is_meter_overload(9.9e31, mode));
+            assert!(is_meter_overload(-9.9e37, mode));
+            assert!(is_meter_overload(f64::INFINITY, mode));
+            let (text, unit) = format_measurement(9.9e31, 10, 1e6, 1e-6, &mode, true, None);
+            assert_eq!(text, "OVERLOAD");
+            assert_eq!(unit, "");
+        }
+    }
+
+    #[test]
+    fn gigahertz_is_not_overload() {
+        let (text, unit) = format_measurement(1e9, 10, 1e12, 1e-6, &MeterMode::Freq, true, None);
+        assert_ne!(text, "OVERLOAD");
+        assert_eq!(unit, "Hz");
+    }
 }
