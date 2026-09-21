@@ -164,6 +164,9 @@ fn classify_model(model: &str) -> ScpiFamily {
 /// Meter key consumed by [`crate::multimeter::RangeCmd::new`]. Compact XDMs share the 1041 tables.
 pub fn range_table_meter(idn: &str) -> String {
     match classify_idn(idn) {
+        ScpiFamily::OwonMeas if idn_model(idn).eq_ignore_ascii_case("XDM2041") => {
+            "OWON XDM2041".to_owned()
+        }
         ScpiFamily::OwonMeas => "OWON XDM1041".to_owned(),
         ScpiFamily::SpePsu => crate::psu::model_from_idn(idn).display_name(),
         ScpiFamily::OwonXdm6000 | ScpiFamily::Unknown => {
@@ -535,9 +538,9 @@ mod tests {
     }
 
     #[test]
-    fn range_table_compact_maps_to_1041() {
+    fn range_table_preserves_xdm2041() {
         assert_eq!(range_table_meter("OWON,XDM1041,s,v"), "OWON XDM1041");
-        assert_eq!(range_table_meter("OWON,XDM2041,s,v"), "OWON XDM1041");
+        assert_eq!(range_table_meter("OWON,XDM2041,s,v"), "OWON XDM2041");
     }
 
     fn settings() -> BootstrapSettings {
@@ -704,6 +707,13 @@ CONF:VOLT:AC 500V
             })
         );
         assert_eq!(
+            ui_hint_from_command("CONF:FRES 50E3"),
+            Some(ScpiUiHint::Mode {
+                mode: MeterMode::Fres,
+                range_param: Some("50E3".into()),
+            })
+        );
+        assert_eq!(
             ui_hint_from_command("RATE F"),
             Some(ScpiUiHint::Rate("F".into()))
         );
@@ -744,6 +754,18 @@ CONF:VOLT:AC 500V
                 .unwrap();
         assert_eq!(vac.index_of_param("5 V"), Some(2));
         assert_eq!(vac.get_opt(0).0, "auto");
+
+        let fres =
+            crate::multimeter::RangeCmd::new("OWON XDM2041", crate::multimeter::MeterMode::Fres)
+                .unwrap();
+        assert_eq!(fres.len(), 4);
+        assert_eq!(fres.get_opt(3), ("50kOhm", "50E3"));
+        assert_eq!(fres.index_of_param("50 kOhm"), Some(3));
+        assert_eq!(MeterMode::from_func_reply("FRES"), Some(MeterMode::Fres));
+        assert!(
+            crate::multimeter::RangeCmd::new("OWON XDM1041", crate::multimeter::MeterMode::Fres)
+                .is_none()
+        );
     }
 
     #[test]

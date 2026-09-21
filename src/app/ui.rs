@@ -1147,6 +1147,7 @@ impl super::MyApp {
                                     ],
                                     &[
                                         MeterMode::Res,
+                                        MeterMode::Fres,
                                         MeterMode::Cap,
                                         MeterMode::Freq,
                                         MeterMode::Per,

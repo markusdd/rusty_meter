@@ -22,6 +22,7 @@ pub enum MeterMode {
     Adc,
     Aac,
     Res,
+    Fres,
     Cap,
     Freq,
     Per,
@@ -32,12 +33,13 @@ pub enum MeterMode {
 }
 
 impl MeterMode {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Vdc,
         Self::Vac,
         Self::Adc,
         Self::Aac,
         Self::Res,
+        Self::Fres,
         Self::Cap,
         Self::Freq,
         Self::Per,
@@ -54,6 +56,7 @@ impl MeterMode {
             Self::Adc => "ADC",
             Self::Aac => "AAC",
             Self::Res => "Ohm",
+            Self::Fres => "Ohm",
             Self::Cap => "F",
             Self::Freq => "Hz",
             Self::Per => "s",
@@ -71,6 +74,7 @@ impl MeterMode {
             Self::Adc => "ADC",
             Self::Aac => "AAC",
             Self::Res => "Ohm",
+            Self::Fres => "4W Ohm",
             Self::Cap => "C",
             Self::Freq => "Freq",
             Self::Per => "Period",
@@ -89,6 +93,7 @@ impl MeterMode {
             Self::Adc => "CONF:CURR:DC AUTO\n",
             Self::Aac => "CONF:CURR:AC AUTO\n",
             Self::Res => "CONF:RES AUTO\n",
+            Self::Fres => "CONF:FRES AUTO\n",
             Self::Cap => "CONF:CAP AUTO\n",
             Self::Freq => "CONF:FREQ\n",
             Self::Per => "CONF:PER\n",
@@ -107,7 +112,14 @@ impl MeterMode {
     pub fn has_manual_range(self) -> bool {
         matches!(
             self,
-            Self::Vdc | Self::Vac | Self::Adc | Self::Aac | Self::Res | Self::Cap | Self::Temp
+            Self::Vdc
+                | Self::Vac
+                | Self::Adc
+                | Self::Aac
+                | Self::Res
+                | Self::Fres
+                | Self::Cap
+                | Self::Temp
         )
     }
 
@@ -119,6 +131,7 @@ impl MeterMode {
             "CURR" => Some(Self::Adc),
             "CURR AC" => Some(Self::Aac),
             "RES" => Some(Self::Res),
+            "FRES" => Some(Self::Fres),
             "CAP" => Some(Self::Cap),
             "FREQ" => Some(Self::Freq),
             "PER" => Some(Self::Per),
@@ -137,6 +150,7 @@ impl MeterMode {
             Self::Adc => &["CURRENT:DC", "CURR:DC"],
             Self::Aac => &["CURRENT:AC", "CURR:AC"],
             Self::Res => &["RESISTANCE", "RES"],
+            Self::Fres => &["FRESISTANCE", "FRES"],
             Self::Cap => &["CAPACITANCE", "CAP"],
             Self::Freq => &["FREQUENCY", "FREQ"],
             Self::Per => &["PERIOD", "PER"],
@@ -221,13 +235,14 @@ impl GenScpi for RangeCmd {
 impl RangeCmd {
     pub fn new(meter: &str, mode: MeterMode) -> Option<Self> {
         match (meter, mode) {
-            ("OWON XDM1041", MeterMode::Vdc) => Some(Self::default()),
-            ("OWON XDM1041", MeterMode::Vac) => Some(Self::owon_xdm1041_vac()),
-            ("OWON XDM1041", MeterMode::Adc) => Some(Self::owon_xdm1041_adc()),
-            ("OWON XDM1041", MeterMode::Aac) => Some(Self::owon_xdm1041_aac()),
-            ("OWON XDM1041", MeterMode::Res) => Some(Self::owon_xdm1041_res()),
-            ("OWON XDM1041", MeterMode::Cap) => Some(Self::owon_xdm1041_cap()),
-            ("OWON XDM1041", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
+            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Vdc) => Some(Self::default()),
+            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Vac) => Some(Self::owon_xdm1041_vac()),
+            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Adc) => Some(Self::owon_xdm1041_adc()),
+            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Aac) => Some(Self::owon_xdm1041_aac()),
+            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Res) => Some(Self::owon_xdm1041_res()),
+            ("OWON XDM2041", MeterMode::Fres) => Some(Self::owon_xdm2041_fres()),
+            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Cap) => Some(Self::owon_xdm1041_cap()),
+            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
             _ => None,
         }
     }
@@ -331,6 +346,20 @@ impl RangeCmd {
                 "500kOhm" => "500E3",
                 "5MOhm" => "5E6",
                 "50MOhm" => "50E6",
+            },
+        }
+    }
+
+    /// XDM2041 four-wire resistance ranges. The programming manual limits
+    /// FRESistance to 50 kOhm even though two-wire RESistance goes to 50 MOhm.
+    fn owon_xdm2041_fres() -> Self {
+        Self {
+            scpi: "CONF:FRES ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "500Ohm" => "500",
+                "5kOhm" => "5E3",
+                "50kOhm" => "50E3",
             },
         }
     }

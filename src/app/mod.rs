@@ -1027,6 +1027,17 @@ impl MyApp {
     /// Whether a mode button should appear in the control panel for the current connection.
     pub fn mode_visible_in_ui(&self, mode: MeterMode) -> bool {
         match mode {
+            MeterMode::Fres => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.connection_type == ConnectionType::ScpiSerial
+                        && idn_model(&self.device.lock().unwrap()).eq_ignore_ascii_case("XDM2041")
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    false
+                }
+            }
             MeterMode::Duty => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
