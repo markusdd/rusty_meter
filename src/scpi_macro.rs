@@ -164,7 +164,14 @@ fn classify_model(model: &str) -> ScpiFamily {
 /// Meter key consumed by [`crate::multimeter::RangeCmd::new`]. Compact XDMs share the 1041 tables.
 pub fn range_table_meter(idn: &str) -> String {
     match classify_idn(idn) {
-        ScpiFamily::OwonMeas => "OWON XDM1041".to_owned(),
+        ScpiFamily::OwonMeas => {
+            let model = idn_model(idn).to_ascii_uppercase();
+            if model.starts_with("XDM1051") || model.starts_with("XDM1251") {
+                "OWON XDM1051".to_owned()
+            } else {
+                "OWON XDM1041".to_owned()
+            }
+        }
         ScpiFamily::SpePsu => crate::psu::model_from_idn(idn).display_name(),
         ScpiFamily::OwonXdm6000 | ScpiFamily::Unknown => {
             let model = idn_model(idn);
@@ -550,6 +557,8 @@ mod tests {
     fn range_table_compact_maps_to_1041() {
         assert_eq!(range_table_meter("OWON,XDM1041,s,v"), "OWON XDM1041");
         assert_eq!(range_table_meter("OWON,XDM2041,s,v"), "OWON XDM1041");
+        assert_eq!(range_table_meter("OWON,XDM1051,s,v"), "OWON XDM1051");
+        assert_eq!(range_table_meter("OWON,XDM1251,s,v"), "OWON XDM1051");
     }
 
     fn settings() -> BootstrapSettings {
@@ -756,6 +765,25 @@ CONF:VOLT:AC 500V
                 .unwrap();
         assert_eq!(vac.index_of_param("5 V"), Some(2));
         assert_eq!(vac.get_opt(0).0, "auto");
+        let vdc1051 =
+            crate::multimeter::RangeCmd::new("OWON XDM1051", crate::multimeter::MeterMode::Vdc)
+                .unwrap();
+        assert_eq!(vdc1051.get_opt(1), ("100mV", "100E-3"));
+        assert_eq!(vdc1051.get_opt(5), ("1000V", "1000"));
+        assert!(vdc1051.index_of_param("50 mV").is_none());
+        assert_eq!(vdc1051.index_of_param("100 V"), Some(4));
+        assert_eq!(
+            crate::multimeter::RangeCmd::new("OWON XDM1051", crate::multimeter::MeterMode::Res)
+                .unwrap()
+                .get_opt(7),
+            ("100MOhm", "100E6")
+        );
+        assert_eq!(
+            crate::multimeter::RangeCmd::new("OWON XDM1051", crate::multimeter::MeterMode::Vac)
+                .unwrap()
+                .get_opt(1),
+            ("500mV", "500E-3")
+        );
     }
 
     #[test]

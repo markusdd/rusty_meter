@@ -10,6 +10,10 @@ and then the combo jumped back to Auto and `RANGE?` was never asked. A 0/1
 reply is now beep when we asked beep. `RANGE?` is still queried in autorange;
 the live window is not applied as a manual range.
 
+XDM1051/1251 range tables follow the user-manual spec (p.46): DC V is
+100 mV / 1 V / 10 V / 100 V / 1000 V, DC I is 100 µA … 10 A, resistance goes
+to 100 MΩ. AC V, AC I, capacitance, and temperature match the 1041.
+
 ## 0.7.1
 
 Owon XDM1051 / XDM1251 (150000-count) support, closing [#20](https://github.com/markusdd/rusty_meter/issues/20).
