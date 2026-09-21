@@ -448,6 +448,18 @@ pub fn classify_reply(line: &str) -> ReplyClass {
     ReplyClass::Unknown
 }
 
+/// `0`/`1` is `AUTO?` on the 41-series, but XDM1051 `SYST:BEEP:STATe?` is also
+/// `0`/`1`. Use the outstanding query when the line is ambiguous. `ON`/`OFF`
+/// is beep on older firmware and may be AUTO on others.
+pub fn classify_status_reply(line: &str, waiting: Option<ReplyClass>) -> ReplyClass {
+    let class = classify_reply(line);
+    match (class, waiting) {
+        (ReplyClass::Auto, Some(ReplyClass::Beep)) => ReplyClass::Beep,
+        (ReplyClass::Beep, Some(ReplyClass::Auto)) => ReplyClass::Auto,
+        (other, _) => other,
+    }
+}
+
 /// Compact Owon `RANGE?` is `50 V`, `5 V`, or a small index. Reject FUNC? / `MEAS?`.
 pub fn parse_range_reply(raw: &str) -> Option<String> {
     let t = raw.trim().trim_matches('"');
@@ -767,6 +779,22 @@ CONF:VOLT:AC 500V
         assert_eq!(classify_reply("NO"), ReplyClass::Beep);
         assert_eq!(classify_reply("1"), ReplyClass::Auto);
         assert_eq!(classify_reply("0"), ReplyClass::Auto);
+        assert_eq!(
+            classify_status_reply("1", Some(ReplyClass::Beep)),
+            ReplyClass::Beep
+        );
+        assert_eq!(
+            classify_status_reply("0", Some(ReplyClass::Beep)),
+            ReplyClass::Beep
+        );
+        assert_eq!(
+            classify_status_reply("1", Some(ReplyClass::Auto)),
+            ReplyClass::Auto
+        );
+        assert_eq!(
+            classify_status_reply("ON", Some(ReplyClass::Auto)),
+            ReplyClass::Auto
+        );
         assert_eq!(classify_reply("50 mV"), ReplyClass::Range);
         assert_eq!(classify_reply("50 V"), ReplyClass::Range);
         assert_eq!(classify_reply("5.524573E-01"), ReplyClass::Meas);

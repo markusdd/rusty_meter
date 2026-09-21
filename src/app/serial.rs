@@ -194,17 +194,15 @@ impl Session {
         if self.snap.auto.is_none() && !self.skip_auto {
             return Some(StatusStep::Auto);
         }
-        if self.snap.auto == Some(false)
-            && self.last_mode.has_manual_range()
-            && self.snap.range.is_none()
-            && !self.skip_range
-        {
+        // Always ask RANGE? when the mode has one. AUTO=1 still means the
+        // reply is the live window, not a manual selection (`snapshot_range`).
+        if self.last_mode.has_manual_range() && self.snap.range.is_none() && !self.skip_range {
             return Some(StatusStep::Range);
         }
         None
     }
 
-    fn continue_status(&mut self, debug: bool) {
+    fn continue_status(&mut self, _debug: bool) {
         if !self.in_status_cycle {
             return;
         }
@@ -215,9 +213,6 @@ impl Session {
                 }
             }
             None => {
-                if debug && self.snap.auto == Some(true) {
-                    println!("AUTO=1, skipping RANGE? (live window is not a manual range)");
-                }
                 self.next_status = None;
                 self.status = None;
                 self.status_since = None;
@@ -637,7 +632,12 @@ async fn handle_line(
     debug: bool,
 ) {
     let unquoted = trimmed.trim_matches('"');
-    let class = scpi_macro::classify_reply(unquoted);
+    let waiting = match session.status {
+        Some(StatusStep::Beep) => Some(scpi_macro::ReplyClass::Beep),
+        Some(StatusStep::Auto) => Some(scpi_macro::ReplyClass::Auto),
+        _ => None,
+    };
+    let class = scpi_macro::classify_status_reply(unquoted, waiting);
 
     if session.scpimode == ScpiMode::Idn || session.awaiting_idn {
         if !scpi_macro::looks_like_idn(trimmed) {
