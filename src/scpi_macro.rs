@@ -164,10 +164,16 @@ fn classify_model(model: &str) -> ScpiFamily {
 /// Meter key consumed by [`crate::multimeter::RangeCmd::new`]. Compact XDMs share the 1041 tables.
 pub fn range_table_meter(idn: &str) -> String {
     match classify_idn(idn) {
-        ScpiFamily::OwonMeas if idn_model(idn).eq_ignore_ascii_case("XDM2041") => {
-            "OWON XDM2041".to_owned()
+        ScpiFamily::OwonMeas => {
+            let model = idn_model(idn).to_ascii_uppercase();
+            if model == "XDM2041" {
+                "OWON XDM2041".to_owned()
+            } else if model.starts_with("XDM1051") || model.starts_with("XDM1251") {
+                "OWON XDM1051".to_owned()
+            } else {
+                "OWON XDM1041".to_owned()
+            }
         }
-        ScpiFamily::OwonMeas => "OWON XDM1041".to_owned(),
         ScpiFamily::SpePsu => crate::psu::model_from_idn(idn).display_name(),
         ScpiFamily::OwonXdm6000 | ScpiFamily::Unknown => {
             let model = idn_model(idn);
@@ -451,6 +457,18 @@ pub fn classify_reply(line: &str) -> ReplyClass {
     ReplyClass::Unknown
 }
 
+/// `0`/`1` is `AUTO?` on the 41-series, but XDM1051 `SYST:BEEP:STATe?` is also
+/// `0`/`1`. Use the outstanding query when the line is ambiguous. `ON`/`OFF`
+/// is beep on older firmware and may be AUTO on others.
+pub fn classify_status_reply(line: &str, waiting: Option<ReplyClass>) -> ReplyClass {
+    let class = classify_reply(line);
+    match (class, waiting) {
+        (ReplyClass::Auto, Some(ReplyClass::Beep)) => ReplyClass::Beep,
+        (ReplyClass::Beep, Some(ReplyClass::Auto)) => ReplyClass::Auto,
+        (other, _) => other,
+    }
+}
+
 /// Compact Owon `RANGE?` is `50 V`, `5 V`, or a small index. Reject FUNC? / `MEAS?`.
 pub fn parse_range_reply(raw: &str) -> Option<String> {
     let t = raw.trim().trim_matches('"');
@@ -541,6 +559,8 @@ mod tests {
     fn range_table_preserves_xdm2041() {
         assert_eq!(range_table_meter("OWON,XDM1041,s,v"), "OWON XDM1041");
         assert_eq!(range_table_meter("OWON,XDM2041,s,v"), "OWON XDM2041");
+        assert_eq!(range_table_meter("OWON,XDM1051,s,v"), "OWON XDM1051");
+        assert_eq!(range_table_meter("OWON,XDM1251,s,v"), "OWON XDM1051");
     }
 
     fn settings() -> BootstrapSettings {
@@ -766,6 +786,25 @@ CONF:VOLT:AC 500V
             crate::multimeter::RangeCmd::new("OWON XDM1041", crate::multimeter::MeterMode::Fres)
                 .is_none()
         );
+        let vdc1051 =
+            crate::multimeter::RangeCmd::new("OWON XDM1051", crate::multimeter::MeterMode::Vdc)
+                .unwrap();
+        assert_eq!(vdc1051.get_opt(1), ("100mV", "100E-3"));
+        assert_eq!(vdc1051.get_opt(5), ("1000V", "1000"));
+        assert!(vdc1051.index_of_param("50 mV").is_none());
+        assert_eq!(vdc1051.index_of_param("100 V"), Some(4));
+        assert_eq!(
+            crate::multimeter::RangeCmd::new("OWON XDM1051", crate::multimeter::MeterMode::Res)
+                .unwrap()
+                .get_opt(7),
+            ("100MOhm", "100E6")
+        );
+        assert_eq!(
+            crate::multimeter::RangeCmd::new("OWON XDM1051", crate::multimeter::MeterMode::Vac)
+                .unwrap()
+                .get_opt(1),
+            ("500mV", "500E-3")
+        );
     }
 
     #[test]
@@ -789,6 +828,22 @@ CONF:VOLT:AC 500V
         assert_eq!(classify_reply("NO"), ReplyClass::Beep);
         assert_eq!(classify_reply("1"), ReplyClass::Auto);
         assert_eq!(classify_reply("0"), ReplyClass::Auto);
+        assert_eq!(
+            classify_status_reply("1", Some(ReplyClass::Beep)),
+            ReplyClass::Beep
+        );
+        assert_eq!(
+            classify_status_reply("0", Some(ReplyClass::Beep)),
+            ReplyClass::Beep
+        );
+        assert_eq!(
+            classify_status_reply("1", Some(ReplyClass::Auto)),
+            ReplyClass::Auto
+        );
+        assert_eq!(
+            classify_status_reply("ON", Some(ReplyClass::Auto)),
+            ReplyClass::Auto
+        );
         assert_eq!(classify_reply("50 mV"), ReplyClass::Range);
         assert_eq!(classify_reply("50 V"), ReplyClass::Range);
         assert_eq!(classify_reply("5.524573E-01"), ReplyClass::Meas);

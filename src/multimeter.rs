@@ -243,6 +243,15 @@ impl RangeCmd {
             ("OWON XDM2041", MeterMode::Fres) => Some(Self::owon_xdm2041_fres()),
             ("OWON XDM1041" | "OWON XDM2041", MeterMode::Cap) => Some(Self::owon_xdm1041_cap()),
             ("OWON XDM1041" | "OWON XDM2041", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
+            // XDM1051/1251 (5.5 digit). User manual p.46: DCV/DCI/RES differ
+            // from the 1041; ACV/ACI/CAP/TEMP match.
+            ("OWON XDM1051", MeterMode::Vdc) => Some(Self::owon_xdm1051_vdc()),
+            ("OWON XDM1051", MeterMode::Vac) => Some(Self::owon_xdm1041_vac()),
+            ("OWON XDM1051", MeterMode::Adc) => Some(Self::owon_xdm1051_adc()),
+            ("OWON XDM1051", MeterMode::Aac) => Some(Self::owon_xdm1041_aac()),
+            ("OWON XDM1051", MeterMode::Res) => Some(Self::owon_xdm1051_res()),
+            ("OWON XDM1051", MeterMode::Cap) => Some(Self::owon_xdm1041_cap()),
+            ("OWON XDM1051", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
             _ => None,
         }
     }
@@ -386,6 +395,51 @@ impl RangeCmd {
             opts: phf_ordered_map! {
                 "PT100" => "PT100",
                 "K-type (KITS90)" => "KITS90",
+            },
+        }
+    }
+
+    fn owon_xdm1051_vdc() -> Self {
+        Self {
+            scpi: "CONF:VOLT:DC ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "100mV" => "100E-3",
+                "1V" => "1",
+                "10V" => "10",
+                "100V" => "100",
+                "1000V" => "1000",
+            },
+        }
+    }
+
+    fn owon_xdm1051_adc() -> Self {
+        Self {
+            scpi: "CONF:CURR:DC ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "100uA" => "100E-6",
+                "1mA" => "1E-3",
+                "10mA" => "10E-3",
+                "100mA" => "100E-3",
+                "1A" => "1",
+                "10A" => "10",
+            },
+        }
+    }
+
+    fn owon_xdm1051_res() -> Self {
+        Self {
+            scpi: "CONF:RES ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "100Ohm" => "100",
+                "1kOhm" => "1E3",
+                "10kOhm" => "10E3",
+                "100kOhm" => "100E3",
+                "1MOhm" => "1E6",
+                "10MOhm" => "10E6",
+                "100MOhm" => "100E6",
             },
         }
     }
