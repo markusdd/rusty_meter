@@ -1031,7 +1031,7 @@ impl MyApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.connection_type == ConnectionType::ScpiSerial
-                        && idn_model(&self.device.lock().unwrap()).eq_ignore_ascii_case("XDM2041")
+                        && crate::scpi_macro::supports_fres(&self.device.lock().unwrap())
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
