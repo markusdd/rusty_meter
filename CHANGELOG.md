@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.7.3
+
+Ensure range tables are reloaded when a meter connects so that the range selection
+is correct also in the initial default mode if the table deviates from the XDM1041.
+
+
 ## 0.7.2
 
 Owon XDM1051 / XDM1251 (150000-count) support, closing (again) [#20](https://github.com/markusdd/rusty_meter/issues/20).
