@@ -796,6 +796,9 @@ impl MyApp {
             self.psu_power_trace.clear();
         }
         self.curr_meter = range_table_meter(idn);
+        self.rangecmd = RangeCmd::new(&self.curr_meter, self.metermode);
+        self.curr_range = 0;
+        self.meter_auto_range = true;
         let bootstrap = bootstrap_commands(family, &self.bootstrap_settings());
         if self.value_debug {
             println!("IDN {idn:?} -> {family:?}, bootstrap: {bootstrap:?}");
@@ -1049,5 +1052,23 @@ impl MyApp {
             }
             _ => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_sequence_refreshes_range_table_for_detected_meter() {
+        let mut app = MyApp::default();
+        assert_eq!(app.rangecmd.as_ref().unwrap().get_opt(1).0, "50mV");
+
+        app.apply_connect_sequence("OWON,XDM1051,serial,V1.0");
+
+        assert_eq!(app.curr_meter, "OWON XDM1051");
+        assert_eq!(app.rangecmd.as_ref().unwrap().get_opt(1).0, "100mV");
+        assert_eq!(app.curr_range, 0);
+        assert!(app.meter_auto_range);
     }
 }
