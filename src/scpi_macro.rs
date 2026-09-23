@@ -143,6 +143,14 @@ pub fn classify_idn(idn: &str) -> ScpiFamily {
     classify_model(&idn_model(idn))
 }
 
+/// Whether an OWON model implements the SCPI `FRESistance` measurement mode.
+pub fn supports_fres(idn: &str) -> bool {
+    matches!(
+        idn_model(idn).trim().to_ascii_uppercase().as_str(),
+        "XDM2041" | "XDM3041" | "XDM3051"
+    )
+}
+
 fn classify_model(model: &str) -> ScpiFamily {
     let m = model.trim().to_ascii_uppercase();
     if m.is_empty() {
@@ -166,10 +174,13 @@ pub fn range_table_meter(idn: &str) -> String {
     match classify_idn(idn) {
         ScpiFamily::OwonMeas => {
             let model = idn_model(idn).to_ascii_uppercase();
-            if model.starts_with("XDM1051") || model.starts_with("XDM1251") {
-                "OWON XDM1051".to_owned()
-            } else {
-                "OWON XDM1041".to_owned()
+            match model.as_str() {
+                "XDM3041" => "OWON XDM3041".to_owned(),
+                "XDM3051" => "OWON XDM3051".to_owned(),
+                _ if model.starts_with("XDM1051") || model.starts_with("XDM1251") => {
+                    "OWON XDM1051".to_owned()
+                }
+                _ => "OWON XDM1041".to_owned(),
             }
         }
         ScpiFamily::SpePsu => crate::psu::model_from_idn(idn).display_name(),
@@ -554,11 +565,18 @@ mod tests {
     }
 
     #[test]
-    fn range_table_compact_maps_to_1041() {
+    fn range_table_and_fres_detection_follow_model() {
         assert_eq!(range_table_meter("OWON,XDM1041,s,v"), "OWON XDM1041");
         assert_eq!(range_table_meter("OWON,XDM2041,s,v"), "OWON XDM1041");
         assert_eq!(range_table_meter("OWON,XDM1051,s,v"), "OWON XDM1051");
         assert_eq!(range_table_meter("OWON,XDM1251,s,v"), "OWON XDM1051");
+        assert_eq!(range_table_meter("OWON,XDM3041,s,v"), "OWON XDM3041");
+        assert_eq!(range_table_meter("OWON,XDM3051,s,v"), "OWON XDM3051");
+        assert!(supports_fres("OWON,XDM2041,s,v"));
+        assert!(supports_fres("OWON,XDM3041,s,v"));
+        assert!(supports_fres("OWON,XDM3051,s,v"));
+        assert!(!supports_fres("OWON,XDM1041,s,v"));
+        assert!(!supports_fres("OWON,XDM1051,s,v"));
     }
 
     fn settings() -> BootstrapSettings {
@@ -725,6 +743,13 @@ CONF:VOLT:AC 500V
             })
         );
         assert_eq!(
+            ui_hint_from_command("CONF:FRES 50E3"),
+            Some(ScpiUiHint::Mode {
+                mode: MeterMode::Fres,
+                range_param: Some("50E3".into()),
+            })
+        );
+        assert_eq!(
             ui_hint_from_command("RATE F"),
             Some(ScpiUiHint::Rate("F".into()))
         );
@@ -765,6 +790,28 @@ CONF:VOLT:AC 500V
                 .unwrap();
         assert_eq!(vac.index_of_param("5 V"), Some(2));
         assert_eq!(vac.get_opt(0).0, "auto");
+
+        let fres =
+            crate::multimeter::RangeCmd::new("OWON XDM1041", crate::multimeter::MeterMode::Fres)
+                .unwrap();
+        assert_eq!(fres.len(), 4);
+        assert_eq!(fres.get_opt(3), ("50kOhm", "50E3"));
+        assert_eq!(fres.index_of_param("50 kOhm"), Some(3));
+        assert_eq!(MeterMode::from_func_reply("FRES"), Some(MeterMode::Fres));
+        let fres3041 =
+            crate::multimeter::RangeCmd::new("OWON XDM3041", crate::multimeter::MeterMode::Fres)
+                .unwrap();
+        assert_eq!(fres3041.get_opt(1), ("600Ohm", "600"));
+        assert_eq!(fres3041.get_opt(7), ("100MOhm", "100E6"));
+        assert_eq!(fres3041.index_of_param("60 kOhm"), Some(3));
+
+        let fres3051 =
+            crate::multimeter::RangeCmd::new("OWON XDM3051", crate::multimeter::MeterMode::Fres)
+                .unwrap();
+        assert_eq!(fres3051.get_opt(1), ("200Ohm", "200"));
+        assert_eq!(fres3051.get_opt(7), ("100MOhm", "100E6"));
+        assert_eq!(fres3051.index_of_param("20 kOhm"), Some(3));
+
         let vdc1051 =
             crate::multimeter::RangeCmd::new("OWON XDM1051", crate::multimeter::MeterMode::Vdc)
                 .unwrap();

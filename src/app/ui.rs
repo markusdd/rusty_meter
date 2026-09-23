@@ -1152,7 +1152,12 @@ impl super::MyApp {
                                         MeterMode::Per,
                                         MeterMode::Duty,
                                     ],
-                                    &[MeterMode::Diod, MeterMode::Cont, MeterMode::Temp],
+                                    &[
+                                        MeterMode::Fres,
+                                        MeterMode::Diod,
+                                        MeterMode::Cont,
+                                        MeterMode::Temp,
+                                    ],
                                 ];
                                 for row in ROWS {
                                     ui.horizontal(|ui| {

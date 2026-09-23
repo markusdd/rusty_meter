@@ -18,7 +18,10 @@ pub fn is_meter_overload(value: f64, mode: MeterMode) -> bool {
         return true;
     }
     mag == METER_OVERLOAD_VALUE
-        && matches!(mode, MeterMode::Diod | MeterMode::Cont | MeterMode::Res)
+        && matches!(
+            mode,
+            MeterMode::Diod | MeterMode::Cont | MeterMode::Res | MeterMode::Fres
+        )
 }
 
 pub fn format_measurement(
@@ -73,7 +76,7 @@ pub fn format_measurement(
                 }
                 .to_string();
             }
-            MeterMode::Res | MeterMode::Cont => {
+            MeterMode::Res | MeterMode::Fres | MeterMode::Cont => {
                 if abs_value >= 1_000_000.0 {
                     display_value = value / 1_000_000.0;
                     display_unit = "MOhm".to_string();

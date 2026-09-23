@@ -15,7 +15,7 @@ Meters which have been confirmed working already:
 - Owon XDM1051
 - Owon XDM1241
 - Owon XDM1251
-- Owon XDM2041 (except 4W resistance, not yet implemented)
+- Owon XDM2041 (including four-wire resistance up to 50 kOhm)
 - Victor 86 series
 
 Power supplies:
@@ -58,6 +58,10 @@ Maybe some stuff even works out of the box.
 - make serial parameters changeable
 
 ## How to get going
+
+For the XDM2041 serial connection, select the COM port assigned by the operating system and use
+115200 baud, 8 data bits, no parity, and 1 stop bit. The COM port is selected from the detected
+ports and is not hardcoded.
 
 You can clone this repository and just run `cargo build --release`, provided you have rust installed (use `rustup`, it's easy).
 The Releases section has automatically built releases for Mac ARM64 and x86_64, Windows 11 x86_64 and Linux x86_64.

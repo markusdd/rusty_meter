@@ -22,6 +22,7 @@ pub enum MeterMode {
     Adc,
     Aac,
     Res,
+    Fres,
     Cap,
     Freq,
     Per,
@@ -32,12 +33,13 @@ pub enum MeterMode {
 }
 
 impl MeterMode {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Vdc,
         Self::Vac,
         Self::Adc,
         Self::Aac,
         Self::Res,
+        Self::Fres,
         Self::Cap,
         Self::Freq,
         Self::Per,
@@ -54,6 +56,7 @@ impl MeterMode {
             Self::Adc => "ADC",
             Self::Aac => "AAC",
             Self::Res => "Ohm",
+            Self::Fres => "Ohm",
             Self::Cap => "F",
             Self::Freq => "Hz",
             Self::Per => "s",
@@ -71,6 +74,7 @@ impl MeterMode {
             Self::Adc => "ADC",
             Self::Aac => "AAC",
             Self::Res => "Ohm",
+            Self::Fres => "4W Ohm",
             Self::Cap => "C",
             Self::Freq => "Freq",
             Self::Per => "Period",
@@ -89,6 +93,7 @@ impl MeterMode {
             Self::Adc => "CONF:CURR:DC AUTO\n",
             Self::Aac => "CONF:CURR:AC AUTO\n",
             Self::Res => "CONF:RES AUTO\n",
+            Self::Fres => "CONF:FRES AUTO\n",
             Self::Cap => "CONF:CAP AUTO\n",
             Self::Freq => "CONF:FREQ\n",
             Self::Per => "CONF:PER\n",
@@ -107,7 +112,14 @@ impl MeterMode {
     pub fn has_manual_range(self) -> bool {
         matches!(
             self,
-            Self::Vdc | Self::Vac | Self::Adc | Self::Aac | Self::Res | Self::Cap | Self::Temp
+            Self::Vdc
+                | Self::Vac
+                | Self::Adc
+                | Self::Aac
+                | Self::Res
+                | Self::Fres
+                | Self::Cap
+                | Self::Temp
         )
     }
 
@@ -119,6 +131,7 @@ impl MeterMode {
             "CURR" => Some(Self::Adc),
             "CURR AC" => Some(Self::Aac),
             "RES" => Some(Self::Res),
+            "FRES" => Some(Self::Fres),
             "CAP" => Some(Self::Cap),
             "FREQ" => Some(Self::Freq),
             "PER" => Some(Self::Per),
@@ -137,6 +150,7 @@ impl MeterMode {
             Self::Adc => &["CURRENT:DC", "CURR:DC"],
             Self::Aac => &["CURRENT:AC", "CURR:AC"],
             Self::Res => &["RESISTANCE", "RES"],
+            Self::Fres => &["FRESISTANCE", "FRES"],
             Self::Cap => &["CAPACITANCE", "CAP"],
             Self::Freq => &["FREQUENCY", "FREQ"],
             Self::Per => &["PERIOD", "PER"],
@@ -226,6 +240,7 @@ impl RangeCmd {
             ("OWON XDM1041", MeterMode::Adc) => Some(Self::owon_xdm1041_adc()),
             ("OWON XDM1041", MeterMode::Aac) => Some(Self::owon_xdm1041_aac()),
             ("OWON XDM1041", MeterMode::Res) => Some(Self::owon_xdm1041_res()),
+            ("OWON XDM1041", MeterMode::Fres) => Some(Self::owon_xdm2041_fres()),
             ("OWON XDM1041", MeterMode::Cap) => Some(Self::owon_xdm1041_cap()),
             ("OWON XDM1041", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
             // XDM1051/1251 (5.5 digit). User manual p.46: DCV/DCI/RES differ
@@ -237,6 +252,22 @@ impl RangeCmd {
             ("OWON XDM1051", MeterMode::Res) => Some(Self::owon_xdm1051_res()),
             ("OWON XDM1051", MeterMode::Cap) => Some(Self::owon_xdm1041_cap()),
             ("OWON XDM1051", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
+            ("OWON XDM3041", MeterMode::Vdc) => Some(Self::owon_xdm3041_vdc()),
+            ("OWON XDM3041", MeterMode::Vac) => Some(Self::owon_xdm3041_vac()),
+            ("OWON XDM3041", MeterMode::Adc) => Some(Self::owon_xdm3041_adc()),
+            ("OWON XDM3041", MeterMode::Aac) => Some(Self::owon_xdm3041_aac()),
+            ("OWON XDM3041", MeterMode::Res | MeterMode::Fres) => {
+                Some(Self::owon_xdm3041_res(mode))
+            }
+            ("OWON XDM3041", MeterMode::Cap) => Some(Self::owon_xdm3000_cap()),
+            ("OWON XDM3051", MeterMode::Vdc) => Some(Self::owon_xdm3051_vdc()),
+            ("OWON XDM3051", MeterMode::Vac) => Some(Self::owon_xdm3051_vac()),
+            ("OWON XDM3051", MeterMode::Adc) => Some(Self::owon_xdm3051_adc()),
+            ("OWON XDM3051", MeterMode::Aac) => Some(Self::owon_xdm3051_aac()),
+            ("OWON XDM3051", MeterMode::Res | MeterMode::Fres) => {
+                Some(Self::owon_xdm3051_res(mode))
+            }
+            ("OWON XDM3051", MeterMode::Cap) => Some(Self::owon_xdm3000_cap()),
             _ => None,
         }
     }
@@ -344,6 +375,20 @@ impl RangeCmd {
         }
     }
 
+    /// XDM2041 four-wire resistance ranges. The programming manual limits
+    /// FRESistance to 50 kOhm even though two-wire RESistance goes to 50 MOhm.
+    fn owon_xdm2041_fres() -> Self {
+        Self {
+            scpi: "CONF:FRES ",
+            opts: phf_ordered_map! {
+                "auto" => "AUTO",
+                "500Ohm" => "500",
+                "5kOhm" => "5E3",
+                "50kOhm" => "50E3",
+            },
+        }
+    }
+
     fn owon_xdm1041_cap() -> Self {
         Self {
             scpi: "CONF:CAP ",
@@ -413,6 +458,131 @@ impl RangeCmd {
                 "100MOhm" => "100E6",
             },
         }
+    }
+
+    fn owon_xdm3041_vdc() -> Self {
+        Self::with_ranges(
+            "CONF:VOLT:DC ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "600mV" => "600E-3", "6V" => "6", "60V" => "60",
+                "600V" => "600", "1000V" => "1000",
+            },
+        )
+    }
+
+    fn owon_xdm3041_vac() -> Self {
+        Self::with_ranges(
+            "CONF:VOLT:AC ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "600mV" => "600E-3", "6V" => "6", "60V" => "60",
+                "600V" => "600", "750V" => "750",
+            },
+        )
+    }
+
+    fn owon_xdm3041_adc() -> Self {
+        Self::with_ranges(
+            "CONF:CURR:DC ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "600uA" => "600E-6", "6mA" => "6E-3",
+                "60mA" => "60E-3", "600mA" => "600E-3", "6A" => "6", "10A" => "10",
+            },
+        )
+    }
+
+    fn owon_xdm3041_aac() -> Self {
+        Self::with_ranges(
+            "CONF:CURR:AC ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "60mA" => "60E-3", "600mA" => "600E-3",
+                "6A" => "6", "10A" => "10",
+            },
+        )
+    }
+
+    fn owon_xdm3041_res(mode: MeterMode) -> Self {
+        Self::with_ranges(
+            if mode == MeterMode::Fres {
+                "CONF:FRES "
+            } else {
+                "CONF:RES "
+            },
+            phf_ordered_map! {
+                "auto" => "AUTO", "600Ohm" => "600", "6kOhm" => "6E3",
+                "60kOhm" => "60E3", "600kOhm" => "600E3", "6MOhm" => "6E6",
+                "60MOhm" => "60E6", "100MOhm" => "100E6",
+            },
+        )
+    }
+
+    fn owon_xdm3051_vdc() -> Self {
+        Self::with_ranges(
+            "CONF:VOLT:DC ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "200mV" => "200E-3", "2V" => "2", "20V" => "20",
+                "200V" => "200", "1000V" => "1000",
+            },
+        )
+    }
+
+    fn owon_xdm3051_vac() -> Self {
+        Self::with_ranges(
+            "CONF:VOLT:AC ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "200mV" => "200E-3", "2V" => "2", "20V" => "20",
+                "200V" => "200", "750V" => "750",
+            },
+        )
+    }
+
+    fn owon_xdm3051_adc() -> Self {
+        Self::with_ranges(
+            "CONF:CURR:DC ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "200uA" => "200E-6", "2mA" => "2E-3",
+                "20mA" => "20E-3", "200mA" => "200E-3", "2A" => "2", "10A" => "10",
+            },
+        )
+    }
+
+    fn owon_xdm3051_aac() -> Self {
+        Self::with_ranges(
+            "CONF:CURR:AC ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "20mA" => "20E-3", "200mA" => "200E-3",
+                "2A" => "2", "10A" => "10",
+            },
+        )
+    }
+
+    fn owon_xdm3051_res(mode: MeterMode) -> Self {
+        Self::with_ranges(
+            if mode == MeterMode::Fres {
+                "CONF:FRES "
+            } else {
+                "CONF:RES "
+            },
+            phf_ordered_map! {
+                "auto" => "AUTO", "200Ohm" => "200", "2kOhm" => "2E3",
+                "20kOhm" => "20E3", "200kOhm" => "200E3", "2MOhm" => "2E6",
+                "10MOhm" => "10E6", "100MOhm" => "100E6",
+            },
+        )
+    }
+
+    fn owon_xdm3000_cap() -> Self {
+        Self::with_ranges(
+            "CONF:CAP ",
+            phf_ordered_map! {
+                "auto" => "AUTO", "2nF" => "2E-9", "20nF" => "20E-9",
+                "200nF" => "200E-9", "2uF" => "2E-6", "20uF" => "20E-6",
+                "200uF" => "200E-6", "10mF" => "10E-3",
+            },
+        )
+    }
+
+    fn with_ranges(scpi: &'static str, opts: OrderedMap<&'static str, &'static str>) -> Self {
+        Self { scpi, opts }
     }
 }
 
