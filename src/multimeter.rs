@@ -235,14 +235,14 @@ impl GenScpi for RangeCmd {
 impl RangeCmd {
     pub fn new(meter: &str, mode: MeterMode) -> Option<Self> {
         match (meter, mode) {
-            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Vdc) => Some(Self::default()),
-            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Vac) => Some(Self::owon_xdm1041_vac()),
-            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Adc) => Some(Self::owon_xdm1041_adc()),
-            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Aac) => Some(Self::owon_xdm1041_aac()),
-            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Res) => Some(Self::owon_xdm1041_res()),
-            ("OWON XDM2041", MeterMode::Fres) => Some(Self::owon_xdm2041_fres()),
-            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Cap) => Some(Self::owon_xdm1041_cap()),
-            ("OWON XDM1041" | "OWON XDM2041", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
+            ("OWON XDM1041", MeterMode::Vdc) => Some(Self::default()),
+            ("OWON XDM1041", MeterMode::Vac) => Some(Self::owon_xdm1041_vac()),
+            ("OWON XDM1041", MeterMode::Adc) => Some(Self::owon_xdm1041_adc()),
+            ("OWON XDM1041", MeterMode::Aac) => Some(Self::owon_xdm1041_aac()),
+            ("OWON XDM1041", MeterMode::Res) => Some(Self::owon_xdm1041_res()),
+            ("OWON XDM1041", MeterMode::Fres) => Some(Self::owon_xdm2041_fres()),
+            ("OWON XDM1041", MeterMode::Cap) => Some(Self::owon_xdm1041_cap()),
+            ("OWON XDM1041", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
             // XDM1051/1251 (5.5 digit). User manual p.46: DCV/DCI/RES differ
             // from the 1041; ACV/ACI/CAP/TEMP match.
             ("OWON XDM1051", MeterMode::Vdc) => Some(Self::owon_xdm1051_vdc()),
@@ -260,7 +260,6 @@ impl RangeCmd {
                 Some(Self::owon_xdm3041_res(mode))
             }
             ("OWON XDM3041", MeterMode::Cap) => Some(Self::owon_xdm3000_cap()),
-            ("OWON XDM3041", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
             ("OWON XDM3051", MeterMode::Vdc) => Some(Self::owon_xdm3051_vdc()),
             ("OWON XDM3051", MeterMode::Vac) => Some(Self::owon_xdm3051_vac()),
             ("OWON XDM3051", MeterMode::Adc) => Some(Self::owon_xdm3051_adc()),
@@ -269,7 +268,6 @@ impl RangeCmd {
                 Some(Self::owon_xdm3051_res(mode))
             }
             ("OWON XDM3051", MeterMode::Cap) => Some(Self::owon_xdm3000_cap()),
-            ("OWON XDM3051", MeterMode::Temp) => Some(Self::owon_xdm1041_temp()),
             _ => None,
         }
     }

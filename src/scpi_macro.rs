@@ -175,7 +175,6 @@ pub fn range_table_meter(idn: &str) -> String {
         ScpiFamily::OwonMeas => {
             let model = idn_model(idn).to_ascii_uppercase();
             match model.as_str() {
-                "XDM2041" => "OWON XDM2041".to_owned(),
                 "XDM3041" => "OWON XDM3041".to_owned(),
                 "XDM3051" => "OWON XDM3051".to_owned(),
                 _ if model.starts_with("XDM1051") || model.starts_with("XDM1251") => {
@@ -568,7 +567,7 @@ mod tests {
     #[test]
     fn range_table_and_fres_detection_follow_model() {
         assert_eq!(range_table_meter("OWON,XDM1041,s,v"), "OWON XDM1041");
-        assert_eq!(range_table_meter("OWON,XDM2041,s,v"), "OWON XDM2041");
+        assert_eq!(range_table_meter("OWON,XDM2041,s,v"), "OWON XDM1041");
         assert_eq!(range_table_meter("OWON,XDM1051,s,v"), "OWON XDM1051");
         assert_eq!(range_table_meter("OWON,XDM1251,s,v"), "OWON XDM1051");
         assert_eq!(range_table_meter("OWON,XDM3041,s,v"), "OWON XDM3041");
@@ -793,17 +792,12 @@ CONF:VOLT:AC 500V
         assert_eq!(vac.get_opt(0).0, "auto");
 
         let fres =
-            crate::multimeter::RangeCmd::new("OWON XDM2041", crate::multimeter::MeterMode::Fres)
+            crate::multimeter::RangeCmd::new("OWON XDM1041", crate::multimeter::MeterMode::Fres)
                 .unwrap();
         assert_eq!(fres.len(), 4);
         assert_eq!(fres.get_opt(3), ("50kOhm", "50E3"));
         assert_eq!(fres.index_of_param("50 kOhm"), Some(3));
         assert_eq!(MeterMode::from_func_reply("FRES"), Some(MeterMode::Fres));
-        assert!(
-            crate::multimeter::RangeCmd::new("OWON XDM1041", crate::multimeter::MeterMode::Fres)
-                .is_none()
-        );
-
         let fres3041 =
             crate::multimeter::RangeCmd::new("OWON XDM3041", crate::multimeter::MeterMode::Fres)
                 .unwrap();

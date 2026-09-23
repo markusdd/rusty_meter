@@ -1147,13 +1147,13 @@ impl super::MyApp {
                                     ],
                                     &[
                                         MeterMode::Res,
-                                        MeterMode::Fres,
                                         MeterMode::Cap,
                                         MeterMode::Freq,
+                                        MeterMode::Per,
                                         MeterMode::Duty,
                                     ],
                                     &[
-                                        MeterMode::Per,
+                                        MeterMode::Fres,
                                         MeterMode::Diod,
                                         MeterMode::Cont,
                                         MeterMode::Temp,
