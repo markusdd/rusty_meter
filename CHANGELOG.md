@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.8.0
+
+Add FRES/4W-Resistance support for the Owon XDM2041 and support for the XDM3041/3051
+in general. Generously contributed by @jhalilaj in #21 .
+
+
 ## 0.7.3
 
 Ensure range tables are reloaded when a meter connects so that the range selection

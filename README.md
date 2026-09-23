@@ -11,18 +11,18 @@ stream etc.
 
 Meters which have been confirmed working already:
 
-- Owon XDM1041
-- Owon XDM1051
-- Owon XDM1241
-- Owon XDM1251
-- Owon XDM2041 (including four-wire resistance up to 50 kOhm)
+- Owon XDM1041/XDM1241
+- Owon XDM1051/XDM1251
+- Owon XDM2041
+- Owon XDM3041
+- Owon XDM3051
 - Victor 86 series
 
 Power supplies:
 
 - Kiprim DC620S (Owon SPE SCPI dialect; other SPE / Kiprim DC models should work)
 
-Looking for testers for the XDM3000 series and further SPE/Kiprim SKUs!
+Looking for testers for further Owon SPE/Kiprim PSUs
 
 *OWON XDM1041 — live graph and histogram*
 
@@ -58,10 +58,6 @@ Maybe some stuff even works out of the box.
 - make serial parameters changeable
 
 ## How to get going
-
-For the XDM2041 serial connection, select the COM port assigned by the operating system and use
-115200 baud, 8 data bits, no parity, and 1 stop bit. The COM port is selected from the detected
-ports and is not hardcoded.
 
 You can clone this repository and just run `cargo build --release`, provided you have rust installed (use `rustup`, it's easy).
 The Releases section has automatically built releases for Mac ARM64 and x86_64, Windows 11 x86_64 and Linux x86_64.
