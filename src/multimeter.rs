@@ -104,6 +104,50 @@ impl MeterMode {
         }
     }
 
+    /// Stable name used by the agent tools (`Vdc`, `Fres`, …).
+    pub fn agent_name(self) -> &'static str {
+        match self {
+            Self::Vdc => "Vdc",
+            Self::Vac => "Vac",
+            Self::Adc => "Adc",
+            Self::Aac => "Aac",
+            Self::Res => "Res",
+            Self::Fres => "Fres",
+            Self::Cap => "Cap",
+            Self::Freq => "Freq",
+            Self::Per => "Per",
+            Self::Duty => "Duty",
+            Self::Diod => "Diod",
+            Self::Cont => "Cont",
+            Self::Temp => "Temp",
+        }
+    }
+
+    /// Accept the agent name, the button label, or a compact `FUNC?` token.
+    pub fn from_agent_name(s: &str) -> Option<Self> {
+        let compact: String = s
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_uppercase();
+        match compact.as_str() {
+            "VDC" | "DCV" | "VOLTDC" | "VOLTAGEDC" => Some(Self::Vdc),
+            "VAC" | "ACV" | "VOLTAC" | "VOLTAGEAC" => Some(Self::Vac),
+            "ADC" | "DCA" | "DCI" | "CURRDC" | "CURRENTDC" => Some(Self::Adc),
+            "AAC" | "ACA" | "ACI" | "CURRAC" | "CURRENTAC" => Some(Self::Aac),
+            "RES" | "OHM" | "OHMS" | "RESISTANCE" => Some(Self::Res),
+            "FRES" | "4WOHM" | "4WIRE" | "4W" | "FRESISTANCE" => Some(Self::Fres),
+            "CAP" | "C" | "CAPACITANCE" => Some(Self::Cap),
+            "FREQ" | "FREQUENCY" | "HZ" => Some(Self::Freq),
+            "PER" | "PERIOD" => Some(Self::Per),
+            "DUTY" | "DUTYCYCLE" => Some(Self::Duty),
+            "DIOD" | "DIODE" => Some(Self::Diod),
+            "CONT" | "CONTINUITY" => Some(Self::Cont),
+            "TEMP" | "TEMPERATURE" => Some(Self::Temp),
+            _ => None,
+        }
+    }
+
     pub fn with_beeper_threshold(self) -> bool {
         matches!(self, Self::Cont | Self::Diod)
     }

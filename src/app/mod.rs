@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -23,6 +23,8 @@ use crate::scpi_macro::{
 };
 
 // Submodules for split impl blocks
+#[cfg(not(target_arch = "wasm32"))]
+mod agent;
 mod graph;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
@@ -257,6 +259,9 @@ pub struct MyApp {
     tempdir: Option<tempfile::TempDir>,
     #[serde(skip)]
     settings_open: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    agent_open: bool,
     #[serde(skip)]
     macros_open: bool,
     #[serde(skip)]
@@ -354,6 +359,35 @@ pub struct MyApp {
     graph_config: graph::GraphConfig, // Graph configuration
     #[serde(skip)]
     plot_dock_state: DockState<ui::PlotTab>, // Dock state for plot tabs
+    /// Serve live readings on 127.0.0.1. Off until the user enables it.
+    #[serde(default)]
+    agent_listen: bool,
+    /// Writes (mode, range, PSU, macros). Off until the user enables it.
+    #[serde(default)]
+    agent_control: bool,
+    #[serde(default = "default_agent_port")]
+    agent_port: u16,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    agent_published: Option<Arc<RwLock<agent::Published>>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    agent_cmd_tx: Option<std::sync::mpsc::Sender<agent::Pending>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    agent_cmd_rx: Option<std::sync::mpsc::Receiver<agent::Pending>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    agent_server: agent::AgentServer,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    agent_bind_error: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    agent_bind_failed_port: Option<u16>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    agent_last_action: String,
 }
 
 fn default_graph_line_secondary() -> Color32 {
@@ -362,6 +396,10 @@ fn default_graph_line_secondary() -> Color32 {
 
 fn default_graph_line_tertiary() -> Color32 {
     Color32::from_rgb(80, 220, 120)
+}
+
+fn default_agent_port() -> u16 {
+    crate::agent_proto::DEFAULT_PORT
 }
 
 // Enum to track connection state
@@ -413,6 +451,8 @@ impl Default for MyApp {
             ports: vec![],
             tempdir: tempfile::Builder::new().prefix("rustymeter").tempdir().ok(),
             settings_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_open: false,
             macros_open: false,
             selected_macro_id: None,
             macro_recording: false,
@@ -505,6 +545,23 @@ impl Default for MyApp {
             graph_config: graph::GraphConfig::default(),     // Default graph config
             plot_dock_state: DockState::new(vec![]), // Initialize empty, populated in update
             mode_display_settings: HashMap::default(),
+            agent_listen: false,
+            agent_control: false,
+            agent_port: default_agent_port(),
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_published: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_cmd_tx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_cmd_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_server: agent::AgentServer::Idle,
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_bind_error: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_bind_failed_port: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_last_action: String::new(),
         }
     }
 }
@@ -535,15 +592,19 @@ impl MyApp {
         // Load previous app state (if any).
         // Note that you must enable the `persistence` feature for this to work.
         if let Some(storage) = cc.storage {
-            let app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
+            let mut app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
             *app.value_debug_shared.lock().unwrap() = app.value_debug;
             *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
             app.poll_ready.store(false, Ordering::SeqCst);
             app.refresh_requested.store(false, Ordering::SeqCst);
+            #[cfg(not(target_arch = "wasm32"))]
+            app.ensure_agent_io();
             return app;
         }
 
-        let app = Self::default();
+        let mut app = Self::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        app.ensure_agent_io();
         *app.value_debug_shared.lock().unwrap() = app.value_debug;
         *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
         app
@@ -716,6 +777,8 @@ impl MyApp {
                 self.psu_curr_trace.push_back(sample.curr);
                 self.psu_power_trace.push_back(sample.power);
                 self.trim_graph_traces();
+                #[cfg(not(target_arch = "wasm32"))]
+                self.observe_live_sample();
             }
             PsuUpdate::Status(status) => {
                 self.psu.apply_status(status, self.psu_edit);
@@ -787,6 +850,8 @@ impl MyApp {
         }
         let family = classify_idn(idn);
         self.scpi_is_psu = family == crate::scpi_macro::ScpiFamily::SpePsu;
+        #[cfg(not(target_arch = "wasm32"))]
+        self.clear_agent_history();
         if self.scpi_is_psu {
             self.psu_model = crate::psu::model_from_idn(idn);
             self.psu = PsuLive::default();
@@ -794,6 +859,8 @@ impl MyApp {
             self.values.clear();
             self.psu_curr_trace.clear();
             self.psu_power_trace.clear();
+            #[cfg(not(target_arch = "wasm32"))]
+            self.clear_agent_trace();
         }
         self.curr_meter = range_table_meter(idn);
         self.rangecmd = RangeCmd::new(&self.curr_meter, self.metermode);
@@ -984,6 +1051,11 @@ impl MyApp {
         self.psu_curr_trace.clear();
         self.psu_power_trace.clear();
         self.hist_values.clear(); // Clear histogram data
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.clear_agent_trace();
+            self.clear_agent_history();
+        }
         self.meas_count = 0; // Reset measurement counter
     }
 

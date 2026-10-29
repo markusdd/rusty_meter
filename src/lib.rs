@@ -3,7 +3,10 @@
 
 mod app;
 pub use app::MyApp;
+pub mod agent_proto;
 mod helpers;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_stdio;
 mod multimeter;
 mod psu;
 mod scpi_macro;

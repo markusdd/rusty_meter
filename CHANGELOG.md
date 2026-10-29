@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.9.0
+
+An agent can read the live value, the on-screen trace, a history that survives
+mode changes, and the recorder, while the window stays open. With
+Menu → Agent → Allow agent control it can also change mode, range, rate, PSU
+setpoints, output, and macros through the same commands as the buttons.
+Enable Menu → Agent → Listen for an agent, then point an MCP client at
+`rusty-meter-mcp`. The listener binds `127.0.0.1` only and is off by default.
+
+The old File menu is now Menu. Agent has its own entry there. Settings stays
+inside the main window and scrolls when it does not fit.
+
+
 ## 0.8.0
 
 Add FRES/4W-Resistance support for the Owon XDM2041 and support for the XDM3041/3051

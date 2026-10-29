@@ -507,6 +507,9 @@ impl super::MyApp {
         let is_web = cfg!(target_arch = "wasm32");
         let mut connect_now = false;
 
+        #[cfg(not(target_arch = "wasm32"))]
+        self.ensure_agent_io();
+
         // On startup, handle certain items once
         if !self.is_init {
             if let Ok(ports) = mio_serial::available_ports() {
@@ -645,6 +648,8 @@ impl super::MyApp {
             if self.curr_meas.is_finite() {
                 if !self.scpi_is_psu {
                     self.values.push_back(self.curr_meas);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.observe_live_sample();
                 }
                 self.update_histogram(self.curr_meas); // Update histogram with new measurement
                 self.trim_graph_traces();
@@ -661,14 +666,21 @@ impl super::MyApp {
             self.last_graph_update = current_time;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_agent(ui.ctx());
+
         egui::Panel::top("top_panel").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
+                ui.menu_button("Menu", |ui| {
                     if ui.button("Settings").clicked() {
                         self.settings_open = true;
                     }
                     if ui.button("SCPI macros").clicked() {
                         self.macros_open = true;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if ui.button("Agent").clicked() {
+                        self.agent_open = true;
                     }
                     if !is_web && ui.button("Quit").clicked() {
                         self.disconnect(); // Use disconnect method instead of partial cleanup
@@ -677,6 +689,8 @@ impl super::MyApp {
                 });
                 ui.add_space(16.0);
                 egui::widgets::global_theme_preference_buttons(ui);
+                #[cfg(not(target_arch = "wasm32"))]
+                self.show_agent_banner(ui);
             });
         });
 
@@ -1328,6 +1342,8 @@ impl super::MyApp {
 
             // Show settings and recording windows
             self.show_settings(ui.ctx());
+            #[cfg(not(target_arch = "wasm32"))]
+            self.show_agent_window(ui.ctx());
             self.show_macros(ui.ctx());
             self.show_recording_window(ui);
 

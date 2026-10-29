@@ -1,6 +1,6 @@
 [package]
 name = "rusty_meter"
-version = "0.8.0"
+version = "0.9.0"
 authors = ["Markus Krause <Krause.Markus@gmx.com>"]
 edition = "2024"
 rust-version = "1.95"  # when updating here, also update release.yml and rust-toolchain file
@@ -57,6 +57,10 @@ wasm-bindgen-futures = "0.4.78"
 [[bin]]
 name = "victor-86bcd-explore"
 path = "src/bin/victor_86bcd_explore.rs"
+
+[[bin]]
+name = "rusty-meter-mcp"
+path = "src/bin/rusty_meter_mcp.rs"
 
 [build-dependencies]
 # for windows icon embedding

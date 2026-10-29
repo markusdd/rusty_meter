@@ -40,11 +40,21 @@ On OWON SCPI meters and SPE/Kiprim PSUs you can store sequences of commands: pla
 
 ![macros](assets/macros.png)
 
-1. **File → SCPI macros** opens the editor. Add, duplicate, delete, and reorder entries. If several macros are set to run on connect, they run in list order.
+1. **Menu → SCPI macros** opens the editor. Add, duplicate, delete, and reorder entries. If several macros are set to run on connect, they run in list order.
 2. **Record macro** (next to Start Recording) captures the SCPI you send from the UI (mode, range, rate, beeper, thresholds). Click again to stop; a new macro is created from that capture.
 3. **Insert current setup** appends the live `CONF` / `RATE` (and beeper or threshold when relevant) into the body. **Run now** sends the selected macro to the meter immediately.
 4. **Editor** — name; which meters it applies to (all SCPI, MEAS-era Owon, XDM 6000, this model, or an IDN substring); run on connect after bootstrap; show as a button on the main window; and the SCPI body. One command per line (`;` also splits). `#` or `//` start a comment. Queries (`…?`) are ignored.
 5. **Main-window buttons** — macros marked “show as button” that match the connected meter appear under the mode grid. Short names take one cell; longer names snap to two cells. The row wraps after four columns.
+
+## Agent access
+
+RustyMeter can serve the open window to an MCP client. The agent reads the same session the graph is drawing, and control commands go through the same buttons and sliders, so a person watching the window sees the change.
+
+1. **Menu → Agent**. Turn on **Listen for an agent on 127.0.0.1**. The default port is `9741`.
+2. **Allow agent control** is separate and defaults off. Leave it off for read-only access. Turn it on before an agent may change mode, range, rate, a PSU setpoint, the output, or run a macro.
+3. Register the `rusty-meter-mcp` binary with the client. It speaks MCP on stdin/stdout and forwards each tool call to the open app. `RUSTY_METER_AGENT` or `--endpoint host:port` selects the socket when it is not `127.0.0.1:9741`.
+
+Tools: `get_session`, `get_reading`, `get_trace`, `get_history`, `get_recording`, `set_mode`, `set_range`, `set_rate`, `set_psu_voltage`, `set_psu_current`, `set_psu_limits`, `set_output`, `run_macro`. `get_trace` matches the graph and clears on a mode change. `get_history` keeps samples across that change. Victor connections stay read-only. The listener is loopback only.
 
 Eventually, as this is all SCPI based (except the Victor driver), it could also be extended to other meters that have SCPI interfaces.
 Maybe some stuff even works out of the box.

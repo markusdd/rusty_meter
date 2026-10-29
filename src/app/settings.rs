@@ -3,8 +3,13 @@ use egui::{Context, TextEdit, Window, color_picker::color_picker_color32};
 impl super::MyApp {
     pub fn show_settings(&mut self, ctx: &Context) {
         if self.settings_open {
+            // Size to the content, but stay inside the main window and scroll.
+            // `auto_sized` turns scrolling off, so the scroll flag comes after it.
+            let max_h = (ctx.content_rect().height() - 8.0).max(160.0);
             Window::new("Settings")
                 .auto_sized()
+                .max_height(max_h)
+                .vscroll(true)
                 .interactable(true)
                 .show(ctx, |ui| {
                     ui.vertical(|ui| {
