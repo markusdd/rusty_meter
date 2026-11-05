@@ -46,9 +46,17 @@ On OWON SCPI meters and SPE/Kiprim PSUs you can store sequences of commands: pla
 4. **Editor** — name; which meters it applies to (all SCPI, MEAS-era Owon, XDM 6000, this model, or an IDN substring); run on connect after bootstrap; show as a button on the main window; and the SCPI body. One command per line (`;` also splits). `#` or `//` start a comment. Queries (`…?`) are ignored.
 5. **Main-window buttons** — macros marked “show as button” that match the connected meter appear under the mode grid. Short names take one cell; longer names snap to two cells. The row wraps after four columns.
 
+## Profiles
+
+Each window keeps its own settings. The settings you already had are the **Default** profile.
+
+The profile combo sits on the connection row, next to the serial port. It loads another profile only while the instrument is disconnected, and it greys out while a connection is open. **Save as…** writes the current settings under a new name and does not send them to the meter or the supply. **Manage…** deletes a profile that no window has open. Default stays, because a new window copies it.
+
+**Menu → New window**, or launching RustyMeter again, opens another window. It cannot take a profile that is already open. When Default is in use, the new window starts from those settings, stays disconnected, and asks you to pick a profile or save a new one. `--profile NAME` or `RUSTY_METER_PROFILE` opens a named profile directly.
+
 ## Agent access
 
-RustyMeter can serve the open window to an MCP client. The agent reads the same session the graph is drawing, and control commands go through the same buttons and sliders, so a person watching the window sees the change.
+RustyMeter can serve the open window to an MCP client. The agent reads the same session the graph is drawing, and control commands go through the same buttons and sliders, so a person watching the window sees the change. Each profile keeps its own agent port.
 
 1. **Menu → Agent**. Turn on **Listen for an agent on 127.0.0.1**. The default port is `9741`.
 2. **Allow agent control** is separate and defaults off. Leave it off for read-only access. Turn it on before an agent may change mode, range, rate, a PSU setpoint, the output, or run a macro.

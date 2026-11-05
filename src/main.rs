@@ -28,16 +28,17 @@ fn main() -> eframe::Result<()> {
         })
     });
 
+    let launch = rusty_meter::profile::resolve_launch();
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1024.0, 1000.0])
             .with_min_inner_size([300.0, 220.0])
-            .with_title("RustyMeter")
+            .with_title(launch.title)
             .with_icon(load_icon()),
         ..Default::default()
     };
     eframe::run_native(
-        "RustyMeter",
+        &launch.app_id,
         native_options,
         Box::new(|cc| {
             // This gives us image support:

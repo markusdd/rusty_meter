@@ -12,6 +12,14 @@ Enable Menu → Agent → Listen for an agent, then point an MCP client at
 The old File menu is now Menu. Agent has its own entry there. Settings stays
 inside the main window and scrolls when it does not fit.
 
+Each window keeps its own settings profile. The original settings are
+Default. A second window starts from those settings, stays disconnected, and
+asks you to pick another profile or save a new one.
+The profile combo sits next to the serial port and greys out while connected.
+Save as… stores a new named profile and does not send anything to the instrument.
+Manage… deletes a profile that is not open. Default stays, because a new
+window copies it.
+
 
 ## 0.8.0
 

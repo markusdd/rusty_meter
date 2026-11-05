@@ -8,6 +8,8 @@ mod helpers;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_stdio;
 mod multimeter;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod profile;
 mod psu;
 mod scpi_macro;
 #[cfg(not(target_arch = "wasm32"))]

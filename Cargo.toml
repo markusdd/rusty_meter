@@ -44,6 +44,7 @@ chrono = { version = "0.4.45", features = [
     "serde",
 ] } # For timestamp handling with serde
 rfd = "0.17.2" # For file dialogs
+ron = "0.12.2"
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

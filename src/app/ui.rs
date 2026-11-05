@@ -672,6 +672,13 @@ impl super::MyApp {
         egui::Panel::top("top_panel").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("Menu", |ui| {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if ui.button("New window").clicked() {
+                        if let Err(err) = crate::profile::open_new_window() {
+                            self.profile_notice =
+                                Some(format!("Could not open another window: {err}"));
+                        }
+                    }
                     if ui.button("Settings").clicked() {
                         self.settings_open = true;
                     }
@@ -717,6 +724,8 @@ impl super::MyApp {
                 ui.horizontal(|ui| {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
+                        self.show_profile_combo(ui);
+                        ui.separator();
                         ui.label("Connection:");
                         egui::ComboBox::from_id_salt("connection_type")
                             .selected_text(match self.connection_type {
@@ -956,6 +965,8 @@ impl super::MyApp {
                             }
                         }
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.show_profile_notice(ui);
                 });
             });
 
@@ -1343,6 +1354,10 @@ impl super::MyApp {
             // Show settings and recording windows
             self.show_settings(ui.ctx());
             #[cfg(not(target_arch = "wasm32"))]
+            self.show_profile_save_as(ui.ctx());
+            #[cfg(not(target_arch = "wasm32"))]
+            self.show_profile_manage(ui.ctx());
+            #[cfg(not(target_arch = "wasm32"))]
             self.show_agent_window(ui.ctx());
             self.show_macros(ui.ctx());
             self.show_recording_window(ui);
@@ -1364,5 +1379,10 @@ impl eframe::App for super::MyApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.update(ui, frame);
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.relaunch_profile_on_exit();
     }
 }

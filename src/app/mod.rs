@@ -29,6 +29,8 @@ mod graph;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
 mod macros;
+#[cfg(not(target_arch = "wasm32"))]
+mod profile_ui;
 mod recording;
 mod serial;
 mod settings;
@@ -367,6 +369,34 @@ pub struct MyApp {
     agent_control: bool,
     #[serde(default = "default_agent_port")]
     agent_port: u16,
+    /// Settings profile this window saves into. Empty while choosing one.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(default = "default_profile_name")]
+    profile_name: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    relaunch_profile: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    save_as_open: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    save_as_name: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    save_as_error: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    manage_open: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    delete_confirm: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    manage_error: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    profile_notice: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
     agent_published: Option<Arc<RwLock<agent::Published>>>,
@@ -400,6 +430,11 @@ fn default_graph_line_tertiary() -> Color32 {
 
 fn default_agent_port() -> u16 {
     crate::agent_proto::DEFAULT_PORT
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_profile_name() -> String {
+    crate::profile::DEFAULT_NAME.to_owned()
 }
 
 // Enum to track connection state
@@ -549,6 +584,24 @@ impl Default for MyApp {
             agent_control: false,
             agent_port: default_agent_port(),
             #[cfg(not(target_arch = "wasm32"))]
+            profile_name: default_profile_name(),
+            #[cfg(not(target_arch = "wasm32"))]
+            relaunch_profile: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            save_as_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            save_as_name: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            save_as_error: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            manage_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            delete_confirm: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            manage_error: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            profile_notice: None,
+            #[cfg(not(target_arch = "wasm32"))]
             agent_published: None,
             #[cfg(not(target_arch = "wasm32"))]
             agent_cmd_tx: None,
@@ -564,6 +617,24 @@ impl Default for MyApp {
             agent_last_action: String::new(),
         }
     }
+}
+
+/// A conflicting extra window copies Default's saved settings. It stays
+/// disconnected; `apply_profile_startup` clears the profile name and the
+/// connect-on-startup flag.
+fn stored_or_default_profile(storage: Option<&dyn eframe::Storage>) -> MyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(
+        crate::profile::startup_profile(),
+        Some(crate::profile::StartupView::Picker { .. })
+    ) && let Some(text) = crate::profile::default_profile_app_ron()
+        && let Ok(app) = ron::from_str::<MyApp>(&text)
+    {
+        return app;
+    }
+    storage
+        .and_then(|storage| eframe::get_value(storage, eframe::APP_KEY))
+        .unwrap_or_default()
 }
 
 impl MyApp {
@@ -592,19 +663,23 @@ impl MyApp {
         // Load previous app state (if any).
         // Note that you must enable the `persistence` feature for this to work.
         if let Some(storage) = cc.storage {
-            let mut app: MyApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
+            let mut app = self::stored_or_default_profile(Some(storage));
             *app.value_debug_shared.lock().unwrap() = app.value_debug;
             *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
             app.poll_ready.store(false, Ordering::SeqCst);
             app.refresh_requested.store(false, Ordering::SeqCst);
             #[cfg(not(target_arch = "wasm32"))]
             app.ensure_agent_io();
+            #[cfg(not(target_arch = "wasm32"))]
+            app.apply_profile_startup(&cc.egui_ctx);
             return app;
         }
 
-        let mut app = Self::default();
+        let mut app = stored_or_default_profile(None);
         #[cfg(not(target_arch = "wasm32"))]
         app.ensure_agent_io();
+        #[cfg(not(target_arch = "wasm32"))]
+        app.apply_profile_startup(&cc.egui_ctx);
         *app.value_debug_shared.lock().unwrap() = app.value_debug;
         *app.poll_interval_shared.lock().unwrap() = app.poll_interval_ms;
         app
