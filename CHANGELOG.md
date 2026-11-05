@@ -20,6 +20,10 @@ Save as… stores a new named profile and does not send anything to the instrume
 Manage… deletes a profile that is not open. Default stays, because a new
 window copies it.
 
+The Victor HID scan at startup runs on a joined worker thread, on every
+platform. On the UI thread that scan re-enters the window event loop and
+aborts on macOS.
+
 
 ## 0.8.0
 

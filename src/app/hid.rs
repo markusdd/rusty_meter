@@ -7,27 +7,36 @@ use tokio::sync::{mpsc, oneshot};
 use crate::multimeter::MeterMode;
 use crate::victor_fs9922::{self, VICTOR_PRODUCT_ID, VICTOR_VENDOR_ID};
 
+fn enumerate_victor_hid() -> Result<Vec<(String, String)>, String> {
+    let api = HidApi::new().map_err(|err| err.to_string())?;
+    let mut devices = Vec::new();
+    for device in api.device_list() {
+        if device.vendor_id() == VICTOR_VENDOR_ID && device.product_id() == VICTOR_PRODUCT_ID {
+            let path = device.path().to_string_lossy().into_owned();
+            let label = format!(
+                "{} {} ({:04x}:{:04x})",
+                device.manufacturer_string().unwrap_or("Victor"),
+                device.product_string().unwrap_or("Multimeter"),
+                device.vendor_id(),
+                device.product_id(),
+            );
+            devices.push((path, label));
+        }
+    }
+    Ok(devices)
+}
+
 impl super::MyApp {
     pub fn refresh_hid_devices(&mut self) {
+        // HidApi::new() pumps the caller's event loop where the OS has one.
+        // On the UI thread that re-enters winit during startup. Joining a
+        // worker keeps the list filled before return, on every platform.
+        let result = std::thread::spawn(enumerate_victor_hid)
+            .join()
+            .unwrap_or(Err("HID scan thread panicked".into()));
         self.hid_devicelist.clear();
-        match HidApi::new() {
-            Ok(api) => {
-                for device in api.device_list() {
-                    if device.vendor_id() == VICTOR_VENDOR_ID
-                        && device.product_id() == VICTOR_PRODUCT_ID
-                    {
-                        let path = device.path().to_string_lossy().into_owned();
-                        let label = format!(
-                            "{} {} ({:04x}:{:04x})",
-                            device.manufacturer_string().unwrap_or("Victor"),
-                            device.product_string().unwrap_or("Multimeter"),
-                            device.vendor_id(),
-                            device.product_id(),
-                        );
-                        self.hid_devicelist.push_back((path, label));
-                    }
-                }
-            }
+        match result {
+            Ok(devices) => self.hid_devicelist.extend(devices),
             Err(e) => {
                 if self.value_debug {
                     println!("Failed to enumerate HID devices: {}", e);
