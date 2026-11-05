@@ -6,8 +6,9 @@ If you like this, a small donation is appreciated:
 
 RustyMeter is a GUI application written in Rust powered by the awesome egui framework and builds
 on the work of @TheHWCave to turn your OWON XDM or Victor multimeter — and now also a Kiprim DC /
-Owon SPE power supply — into a PC-based powerhouse with neat graphing, recording, using it on
-stream etc.
+Owon SPE power supply — into a PC-based powerhouse with neat graphing, recording or using it on
+stream. On top it is now also AI native with an optional MCP server you can turn on to have your
+favorite AI assist you in your hardware projects.
 
 Meters which have been confirmed working already:
 
