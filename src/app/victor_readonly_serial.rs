@@ -23,6 +23,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until};
 
 use crate::multimeter::MeterMode;
+use crate::ut71x;
 use crate::victor_86bcd_capture::{self, Victor86bcdCaptureJob};
 use crate::victor_dm1107::{self, Dm1107LiveUpdate};
 use crate::victor_es519xx;
@@ -37,6 +38,8 @@ pub enum VictorReadonlyProtocol {
     Es519xx,
     /// Victor 86B/C/D — DM1107, 9600 8N1, 20-byte `a5 12` binary frames.
     Dm1107,
+    /// UNI-T UT71x — 2400 7o1, 11-byte ASCII frames.
+    Ut71x,
 }
 
 impl VictorReadonlyProtocol {
@@ -44,6 +47,7 @@ impl VictorReadonlyProtocol {
         match self {
             Self::Es519xx => "Victor 86E (read only)",
             Self::Dm1107 => "Victor 86B/C/D serial (DM1107)",
+            Self::Ut71x => "UNI-T UT71 (read only)",
         }
     }
 
@@ -51,6 +55,7 @@ impl VictorReadonlyProtocol {
         match self {
             Self::Es519xx => "Victor 86E serial task started (ES51932, 19200 7o1)",
             Self::Dm1107 => "Victor 86B/C/D serial task started (DM1107, 9600 8N1)",
+            Self::Ut71x => "UNI-T UT71 serial task started (2400 7o1)",
         }
     }
 }
@@ -85,6 +90,11 @@ enum Decoder {
     Dm1107 {
         stream: victor_dm1107::Dm1107Stream,
     },
+    Ut71x {
+        packet_buf: Vec<u8>,
+        last_mode: Option<MeterMode>,
+        last_unit: Option<String>,
+    },
 }
 
 impl Decoder {
@@ -97,6 +107,11 @@ impl Decoder {
             },
             VictorReadonlyProtocol::Dm1107 => Self::Dm1107 {
                 stream: victor_dm1107::Dm1107Stream::new(),
+            },
+            VictorReadonlyProtocol::Ut71x => Self::Ut71x {
+                packet_buf: Vec::with_capacity(64),
+                last_mode: None,
+                last_unit: None,
             },
         }
     }
@@ -120,6 +135,9 @@ impl Decoder {
                         chunk.len(),
                         victor_dm1107::hex_encode(&chunk[..chunk.len().min(32)]),
                     );
+                }
+                VictorReadonlyProtocol::Ut71x => {
+                    println!("UT71 +{} bytes", chunk.len());
                 }
             }
         }
@@ -153,6 +171,31 @@ impl Decoder {
                         *last_unit = Some(reading.unit.clone());
                     }
                     // Send every sample: cheap, keeps curr_unit in sync with the wire range.
+                    let _ = tx_mode.send((reading.mode, reading.unit)).await;
+                }
+            }
+            (
+                Self::Ut71x {
+                    packet_buf,
+                    last_mode,
+                    last_unit,
+                },
+                TaskDispatch::Es519xx { tx_value, tx_mode },
+            ) => {
+                for reading in ut71x::feed_bytes(packet_buf, chunk) {
+                    if debug {
+                        println!(
+                            "UT71 reading: {} {:?} {}",
+                            reading.value, reading.mode, reading.unit
+                        );
+                    }
+                    let _ = tx_value.send(Some(reading.value)).await;
+                    let mode_changed = *last_mode != Some(reading.mode);
+                    let unit_changed = last_unit.as_deref() != Some(reading.unit.as_str());
+                    if mode_changed || unit_changed {
+                        *last_mode = Some(reading.mode);
+                        *last_unit = Some(reading.unit.clone());
+                    }
                     let _ = tx_mode.send((reading.mode, reading.unit)).await;
                 }
             }
@@ -423,7 +466,7 @@ impl super::MyApp {
         let device_shared = self.device.clone();
 
         let (dispatch, capture) = match protocol {
-            VictorReadonlyProtocol::Es519xx => {
+            VictorReadonlyProtocol::Es519xx | VictorReadonlyProtocol::Ut71x => {
                 let (tx_value, rx_value) = mpsc::channel::<Option<f64>>(100);
                 let (tx_mode, rx_mode) = mpsc::channel::<(MeterMode, String)>(10);
                 self.serial_rx = Some(rx_value);
@@ -464,6 +507,10 @@ impl super::MyApp {
 
     pub fn spawn_victor_86e_serial_task(&mut self) {
         self.spawn_victor_readonly_serial_task(VictorReadonlyProtocol::Es519xx);
+    }
+
+    pub fn spawn_ut71_serial_task(&mut self) {
+        self.spawn_victor_readonly_serial_task(VictorReadonlyProtocol::Ut71x);
     }
 
     pub fn spawn_victor_86bcd_serial_task(&mut self) {

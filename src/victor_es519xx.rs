@@ -22,8 +22,6 @@
 //!   captures and serial parameters (Markus Krause / MFJoyBoy)
 //! - [EEVblog teardown / ES51932_log](https://www.eevblog.com/forum/testgear/teardown-ruoshui-86e-22000-count-dmm-50-eur/)
 //!   — original 14-byte packet description and Perl decoder
-//! - [libsigrok `es519xx.c`](https://github.com/sigrokproject/libsigrok/blob/master/src/dmm/es519xx.c)
-//!   — range exponents and function-byte mapping (ES51931/ES51932, 19200/14b)
 
 use crate::helpers::METER_OVERLOAD_VALUE;
 use crate::multimeter::MeterMode;
@@ -32,7 +30,7 @@ use crate::victor_fs9922::VictorReading;
 pub const VICTOR_86E_BAUD: u32 = 19200;
 pub const PACKET_LEN: usize = 14;
 
-/// Exponents for 19200 baud / 14-byte / ES51931/32 packets (from libsigrok).
+/// Exponents for 19200 baud / 14-byte / ES51931/32 packets.
 const EXPONENTS_VOLTAGE: [i32; 8] = [-4, -3, -2, -1, -5, 0, 0, 0];
 const EXPONENTS_UA: [i32; 8] = [-8, -7, 0, 0, 0, 0, 0, 0];
 const EXPONENTS_MA: [i32; 8] = [-6, -5, 0, 0, 0, 0, 0, 0];
@@ -114,7 +112,7 @@ fn parse_flags(buf: &[u8; PACKET_LEN], flags: &mut Es519xxFlags) {
         0x34 => {
             flags.is_temperature = true;
             // Victor 86E (user report #16): judge set → °F, clear → °C
-            // (opposite of some ES519xx / libsigrok notes).
+            // (opposite of some ES519xx notes).
             if flags.is_judge {
                 flags.is_fahrenheit = true;
             } else {
@@ -202,7 +200,7 @@ fn range_exponent(buf: &[u8; PACKET_LEN], flags: &Es519xxFlags) -> Option<i32> {
     let idx = idx as usize;
 
     // Duty / temperature: fixed one-decimal scale (not range tables).
-    // Temperature digits are always °C on the wire (libsigrok).
+    // Temperature digits are always °C on the wire.
     Some(if flags.is_duty_cycle || flags.is_temperature {
         -1
     } else if flags.is_voltage {

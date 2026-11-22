@@ -694,6 +694,8 @@ impl super::MyApp {
             ConnectionType::Victor86bcdSerial => "victor_86bcd_serial",
             #[cfg(not(target_arch = "wasm32"))]
             ConnectionType::Victor86eSerial => "victor_86e_serial",
+            #[cfg(not(target_arch = "wasm32"))]
+            ConnectionType::UniTUt71Serial => "uni_t_ut71_serial",
         }
     }
 

@@ -735,6 +735,7 @@ impl super::MyApp {
                                     "Victor Serial (86B/C/D)"
                                 }
                                 super::ConnectionType::Victor86eSerial => "Victor Serial (86E)",
+                                super::ConnectionType::UniTUt71Serial => "UNI-T UT71 Serial",
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
@@ -756,6 +757,11 @@ impl super::MyApp {
                                     &mut self.connection_type,
                                     super::ConnectionType::Victor86eSerial,
                                     "Victor Serial (86E)",
+                                );
+                                ui.selectable_value(
+                                    &mut self.connection_type,
+                                    super::ConnectionType::UniTUt71Serial,
+                                    "UNI-T UT71 Serial",
                                 );
                             });
                     }
@@ -779,7 +785,8 @@ impl super::MyApp {
                         #[cfg(not(target_arch = "wasm32"))]
                         super::ConnectionType::ScpiSerial
                         | super::ConnectionType::Victor86bcdSerial
-                        | super::ConnectionType::Victor86eSerial => {
+                        | super::ConnectionType::Victor86eSerial
+                        | super::ConnectionType::UniTUt71Serial => {
                             ui.label("Serial port:");
                             ui.add(
                                 DropDownBox::from_iter(
@@ -892,6 +899,28 @@ impl super::MyApp {
                                                     "Victor 86B/C/D (DM1107)".to_owned();
                                                 self.rangecmd = None;
                                                 self.spawn_victor_86bcd_serial_task();
+                                            }
+                                            Err(e) => {
+                                                self.connection_state =
+                                                    super::ConnectionState::Disconnected;
+                                                self.connection_error =
+                                                    Some(format!("Failed to connect: {}", e));
+                                            }
+                                        }
+                                    }
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    super::ConnectionType::UniTUt71Serial => {
+                                        match super::open_victor_7o1_serial(
+                                            &self.serial_port,
+                                            crate::ut71x::BAUD,
+                                        ) {
+                                            Ok(serial) => {
+                                                self.serial = Some(serial);
+                                                self.connection_state =
+                                                    super::ConnectionState::Connected;
+                                                self.curr_meter = "UNI-T UT71".to_owned();
+                                                self.rangecmd = None;
+                                                self.spawn_ut71_serial_task();
                                             }
                                             Err(e) => {
                                                 self.connection_state =
@@ -1182,6 +1211,7 @@ impl super::MyApp {
                                         MeterMode::Diod,
                                         MeterMode::Cont,
                                         MeterMode::Temp,
+                                        MeterMode::Power,
                                     ],
                                 ];
                                 for row in ROWS {

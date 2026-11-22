@@ -7,11 +7,6 @@
 //! **Newer** Victor meters (e.g. 86D, DM1107) do not use this path — they stream a
 //! binary serial protocol over an opto-isolated CP2102 link. See `victor_dm1107`.
 //! Victor 86E (ES51932 ASCII serial) is a separate line: `victor_es519xx`.
-//!
-//! ## Sources
-//!
-//! - <https://sigrok.org/wiki/Victor_protocol>
-//! - libsigrok `serial_hid_victor.c` and `fs9922.c`
 
 use crate::multimeter::MeterMode;
 

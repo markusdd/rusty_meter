@@ -13,6 +13,8 @@ pub mod profile;
 mod psu;
 mod scpi_macro;
 #[cfg(not(target_arch = "wasm32"))]
+mod ut71x;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod victor_86bcd_capture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod victor_dm1107;

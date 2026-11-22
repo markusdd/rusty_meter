@@ -30,10 +30,12 @@ pub enum MeterMode {
     Diod,
     Cont,
     Temp,
+    /// Read-only display mode for meters that report power (UNI-T UT71E). No SCPI command.
+    Power,
 }
 
 impl MeterMode {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Vdc,
         Self::Vac,
         Self::Adc,
@@ -47,6 +49,7 @@ impl MeterMode {
         Self::Diod,
         Self::Cont,
         Self::Temp,
+        Self::Power,
     ];
 
     pub fn default_unit(self) -> &'static str {
@@ -64,6 +67,7 @@ impl MeterMode {
             Self::Diod => "V",
             Self::Cont => "Ohm",
             Self::Temp => "°C",
+            Self::Power => "W",
         }
     }
 
@@ -82,6 +86,7 @@ impl MeterMode {
             Self::Diod => "Diode",
             Self::Cont => "Cont",
             Self::Temp => "Temp",
+            Self::Power => "P",
         }
     }
 
@@ -101,6 +106,7 @@ impl MeterMode {
             Self::Diod => "CONF:DIOD\n",
             Self::Cont => "CONF:CONT\n",
             Self::Temp => "CONF:TEMP:RTD PT100\n",
+            Self::Power => "",
         }
     }
 
@@ -120,6 +126,7 @@ impl MeterMode {
             Self::Diod => "Diod",
             Self::Cont => "Cont",
             Self::Temp => "Temp",
+            Self::Power => "Power",
         }
     }
 
@@ -144,6 +151,7 @@ impl MeterMode {
             "DIOD" | "DIODE" => Some(Self::Diod),
             "CONT" | "CONTINUITY" => Some(Self::Cont),
             "TEMP" | "TEMPERATURE" => Some(Self::Temp),
+            "P" | "POWER" | "WATT" | "WATTS" => Some(Self::Power),
             _ => None,
         }
     }
@@ -201,7 +209,7 @@ impl MeterMode {
             Self::Temp => &["TEMPERATURE:RTD", "TEMP:RTD", "TEMP"],
             Self::Diod => &["DIODE", "DIOD"],
             Self::Cont => &["CONTINUITY", "CONT"],
-            Self::Duty => &[],
+            Self::Duty | Self::Power => &[],
         }
     }
 }

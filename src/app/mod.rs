@@ -46,11 +46,12 @@ mod victor_readonly_serial;
 /// - `VictorHid` — **legacy** Victor 86B/C/D via USB HID + FS9922 cable (discontinued)
 /// - `Victor86bcdSerial` — **newer** Victor (e.g. 86D): DM1107, opto-isolated CP2102 serial
 /// - `Victor86eSerial` — Victor 86E via CP2102 UART + ES51932 ASCII frames (read only)
+/// - `UniTUt71Serial` — UNI-T UT71A–E / UT804, 2400 7o1, 11-byte frames (read only)
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ConnectionType {
     #[default]
     ScpiSerial,
-    /// Legacy Victor 86B/C/D: USB HID, Fortune FS9922-DMM4. See `victor_fs9922` / sigrok wiki.
+    /// Legacy Victor 86B/C/D: USB HID, Fortune FS9922-DMM4. See `victor_fs9922`.
     #[cfg(not(target_arch = "wasm32"))]
     VictorHid,
     /// Newer Victor (e.g. 86D): DM1107, 9600 8N1 serial over opto-isolated USB. See `victor_dm1107`.
@@ -59,6 +60,9 @@ pub enum ConnectionType {
     /// Victor 86E: CP2102 serial 19200 7o1, Cyrustek ES51932. See `victor_es519xx` module.
     #[cfg(not(target_arch = "wasm32"))]
     Victor86eSerial,
+    /// UNI-T UT71A–E / UT804: 2400 7o1, 11-byte frames. See `ut71x`. Read only.
+    #[cfg(not(target_arch = "wasm32"))]
+    UniTUt71Serial,
 }
 
 /// Victor 86D / DM1107: 9600 baud, 8 data bits, no parity, 1 stop (8N1).
@@ -1156,6 +1160,7 @@ impl MyApp {
                 ConnectionType::VictorHid
                     | ConnectionType::Victor86bcdSerial
                     | ConnectionType::Victor86eSerial
+                    | ConnectionType::UniTUt71Serial
             )
         }
         #[cfg(target_arch = "wasm32")]
@@ -1192,6 +1197,16 @@ impl MyApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.is_victor_connection()
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    false
+                }
+            }
+            MeterMode::Power => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.connection_type == ConnectionType::UniTUt71Serial
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
