@@ -82,6 +82,13 @@ pub fn parse_packet(buf: &[u8; PACKET_LEN]) -> Option<Reading> {
     })
 }
 
+/// BLE notifications from the UT-D07A keep the 7o1 parity bit in bit 7.
+/// A serial port opened as 7o1 does not. Mask it, then use [`feed_bytes`].
+pub fn feed_ble_bytes(buffer: &mut Vec<u8>, chunk: &[u8]) -> Vec<Reading> {
+    let cleaned: Vec<u8> = chunk.iter().map(|byte| byte & 0x7f).collect();
+    feed_bytes(buffer, &cleaned)
+}
+
 pub fn feed_bytes(buffer: &mut Vec<u8>, chunk: &[u8]) -> Vec<Reading> {
     buffer.extend_from_slice(chunk);
     let mut readings = Vec::new();
@@ -331,5 +338,15 @@ mod tests {
         let got = feed_bytes(&mut buf, b"\x01\r\n");
         assert_eq!(got.len(), 1);
         assert!((got[0].value - 1.2345).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ble_bytes_ignore_the_parity_bit() {
+        let mut buf = Vec::new();
+        let raw: Vec<u8> = b"1234511\x02\x01\r\n".iter().map(|b| b | 0x80).collect();
+        let got = feed_ble_bytes(&mut buf, &raw);
+        assert_eq!(got.len(), 1);
+        assert!((got[0].value - 1.2345).abs() < 1e-9);
+        assert_eq!(got[0].mode, MeterMode::Vdc);
     }
 }

@@ -5,7 +5,8 @@
 Read-only serial support for the UNI-T UT71A–E and UT804 (2400 baud, 7o1,
 11-byte frames). The connection type to use is "UNI-T UT71 Serial".
 Power mode on the UT71E is also supported. 4–20 mA loop current is shown as DC current (ADC).
-Needs a serial or Bluetooth COM port, not the UT-D04 HID cable.
+Needs a serial port, or the UT-D07A Bluetooth adapter ("UNI-T UT71 Bluetooth").
+The UT-D04 HID cable is not supported.
 
 ## 0.9.0
 

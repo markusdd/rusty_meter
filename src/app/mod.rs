@@ -36,6 +36,8 @@ mod serial;
 mod settings;
 mod ui;
 #[cfg(not(target_arch = "wasm32"))]
+mod ut71_ble;
+#[cfg(not(target_arch = "wasm32"))]
 mod victor_86bcd_capture_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod victor_readonly_serial;
@@ -47,6 +49,7 @@ mod victor_readonly_serial;
 /// - `Victor86bcdSerial` — **newer** Victor (e.g. 86D): DM1107, opto-isolated CP2102 serial
 /// - `Victor86eSerial` — Victor 86E via CP2102 UART + ES51932 ASCII frames (read only)
 /// - `UniTUt71Serial` — UNI-T UT71A–E / UT804, 2400 7o1, 11-byte frames (read only)
+/// - `UniTUt71Ble` — same frames via the UT-D07A Bluetooth adapter (read only)
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ConnectionType {
     #[default]
@@ -63,6 +66,9 @@ pub enum ConnectionType {
     /// UNI-T UT71A–E / UT804: 2400 7o1, 11-byte frames. See `ut71x`. Read only.
     #[cfg(not(target_arch = "wasm32"))]
     UniTUt71Serial,
+    /// UT-D07A BLE adapter. Notifications are the same frames with the parity bit set.
+    #[cfg(not(target_arch = "wasm32"))]
+    UniTUt71Ble,
 }
 
 /// Victor 86D / DM1107: 9600 baud, 8 data bits, no parity, 1 stop (8N1).
@@ -161,6 +167,9 @@ impl Default for ModeDisplaySettings {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+type Ut71ScanRx = std::sync::mpsc::Receiver<Result<Vec<(String, String)>, String>>;
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(Serialize, Deserialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
@@ -243,6 +252,22 @@ pub struct MyApp {
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
     hid_devicelist: VecDeque<(String, String)>,
+    /// Address of the UT-D07A adapter chosen in the connection row.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(default)]
+    ut71_ble_address: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    ut71_ble_devices: Vec<(String, String)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    ut71_ble_scan_rx: Option<Ut71ScanRx>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    ut71_ble_error_rx: Option<std::sync::mpsc::Receiver<String>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    ut71_ble_scanned: bool,
     #[serde(skip)]
     values: VecDeque<f64>,
     #[serde(skip)]
@@ -479,6 +504,16 @@ impl Default for MyApp {
             portlist: VecDeque::with_capacity(11),
             #[cfg(not(target_arch = "wasm32"))]
             hid_devicelist: VecDeque::with_capacity(4),
+            #[cfg(not(target_arch = "wasm32"))]
+            ut71_ble_address: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ut71_ble_devices: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ut71_ble_scan_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            ut71_ble_error_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            ut71_ble_scanned: false,
             values: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
             psu_curr_trace: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
             psu_power_trace: VecDeque::with_capacity(MEM_DEPTH_DEFAULT + 1),
@@ -1161,6 +1196,7 @@ impl MyApp {
                     | ConnectionType::Victor86bcdSerial
                     | ConnectionType::Victor86eSerial
                     | ConnectionType::UniTUt71Serial
+                    | ConnectionType::UniTUt71Ble
             )
         }
         #[cfg(target_arch = "wasm32")]
@@ -1206,7 +1242,10 @@ impl MyApp {
             MeterMode::Power => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    self.connection_type == ConnectionType::UniTUt71Serial
+                    matches!(
+                        self.connection_type,
+                        ConnectionType::UniTUt71Serial | ConnectionType::UniTUt71Ble
+                    )
                 }
                 #[cfg(target_arch = "wasm32")]
                 {

@@ -50,6 +50,9 @@ ron = "0.12.2"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11.11"
 hidapi = "2.6.7"
+btleplug = "0.11"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+uuid = { version = "1", default-features = false }
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]

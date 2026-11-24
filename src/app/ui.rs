@@ -509,6 +509,8 @@ impl super::MyApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         self.ensure_agent_io();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_ut71_ble(ui.ctx());
 
         // On startup, handle certain items once
         if !self.is_init {
@@ -736,6 +738,7 @@ impl super::MyApp {
                                 }
                                 super::ConnectionType::Victor86eSerial => "Victor Serial (86E)",
                                 super::ConnectionType::UniTUt71Serial => "UNI-T UT71 Serial",
+                                super::ConnectionType::UniTUt71Ble => "UNI-T UT71 Bluetooth",
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
@@ -762,6 +765,11 @@ impl super::MyApp {
                                     &mut self.connection_type,
                                     super::ConnectionType::UniTUt71Serial,
                                     "UNI-T UT71 Serial",
+                                );
+                                ui.selectable_value(
+                                    &mut self.connection_type,
+                                    super::ConnectionType::UniTUt71Ble,
+                                    "UNI-T UT71 Bluetooth",
                                 );
                             });
                     }
@@ -799,6 +807,40 @@ impl super::MyApp {
                                 .select_on_focus(true)
                                 .filter_by_input(false),
                             );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        super::ConnectionType::UniTUt71Ble => {
+                            ui.label("Adapter:");
+                            let selected = self
+                                .ut71_ble_devices
+                                .iter()
+                                .find(|(addr, _)| addr == &self.ut71_ble_address)
+                                .map(|(_, label)| label.clone())
+                                .unwrap_or_else(|| {
+                                    if self.ut71_ble_scan_rx.is_some() {
+                                        "Scanning…".to_owned()
+                                    } else {
+                                        "No adapter found".to_owned()
+                                    }
+                                });
+                            egui::ComboBox::from_id_salt("ut71_ble")
+                                .selected_text(selected)
+                                .width(220.0)
+                                .show_ui(ui, |ui| {
+                                    for (addr, label) in &self.ut71_ble_devices {
+                                        if ui
+                                            .selectable_label(addr == &self.ut71_ble_address, label)
+                                            .clicked()
+                                        {
+                                            self.ut71_ble_address = addr.clone();
+                                        }
+                                    }
+                                });
+                            if ui.button("Scan").clicked() {
+                                self.ut71_ble_devices.clear();
+                                self.ut71_ble_scanned = true;
+                                self.start_ut71_ble_scan();
+                            }
                         }
                         #[cfg(not(target_arch = "wasm32"))]
                         super::ConnectionType::VictorHid => {
@@ -906,6 +948,22 @@ impl super::MyApp {
                                                 self.connection_error =
                                                     Some(format!("Failed to connect: {}", e));
                                             }
+                                        }
+                                    }
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    super::ConnectionType::UniTUt71Ble => {
+                                        if self.ut71_ble_address.is_empty() {
+                                            self.connection_state =
+                                                super::ConnectionState::Disconnected;
+                                            self.connection_error = Some(
+                                                "Scan for the UT-D07A, then choose it".to_owned(),
+                                            );
+                                        } else {
+                                            self.connection_state =
+                                                super::ConnectionState::Connected;
+                                            self.curr_meter = "UNI-T UT71".to_owned();
+                                            self.rangecmd = None;
+                                            self.spawn_ut71_ble_task();
                                         }
                                     }
                                     #[cfg(not(target_arch = "wasm32"))]

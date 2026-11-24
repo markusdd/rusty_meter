@@ -23,7 +23,7 @@ Power supplies:
 
 - Kiprim DC620S (Owon SPE SCPI dialect; other SPE / Kiprim DC models should work)
 
-Looking for testers for further Owon SPE/Kiprim PSUs
+Looking for testers for further Owon SPE/Kiprim PSUs, and for a UNI-T UT71 with the UT-D07A Bluetooth adapter
 
 *OWON XDM1041 — live graph and histogram*
 
